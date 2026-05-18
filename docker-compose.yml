@@ -1,0 +1,63 @@
+services:
+  api:
+    build: .
+    entrypoint: ["/bin/sh", "scripts/docker-entrypoint-api.sh"]
+    environment:
+      DB_PATH: /app/data/statshift.db
+    volumes:
+      - statshift_data:/app/data
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "11434:11434"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:11434/"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+
+  ollama-pull:
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["ollama", "pull", "gemma2:2b"]
+    restart: "no"
+
+  ui:
+    build: .
+    entrypoint: ["/bin/sh", "scripts/docker-entrypoint-ui.sh"]
+    environment:
+      API_BASE_URL: http://api:8000
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_MODEL: gemma2:2b
+    ports:
+      - "8501:8501"
+    depends_on:
+      api:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+      ollama-pull:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+volumes:
+  statshift_data:
+  ollama_data:
