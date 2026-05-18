@@ -48,6 +48,8 @@ services:
       API_BASE_URL: http://api:8000
       OLLAMA_BASE_URL: http://ollama:11434
       OLLAMA_MODEL: gemma2:2b
+    volumes:
+      - statshift_data:/app/data
     ports:
       - "8501:8501"
     depends_on:
@@ -58,6 +60,15 @@ services:
       ollama-pull:
         condition: service_completed_successfully
     restart: unless-stopped
+
+  # Optional: pre-warm mock-draft player cache (ffanalytics scrape; can take several minutes)
+  ffanalytics-sync:
+    profiles: [sync]
+    build: .
+    volumes:
+      - statshift_data:/app/data
+    entrypoint: ["python", "scripts/sync_ffanalytics_players.py"]
+    restart: "no"
 
 volumes:
   statshift_data:

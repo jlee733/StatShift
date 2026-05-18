@@ -11,7 +11,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from app.mock_draft_tab import render_mock_draft_tab
 from config import settings
+from draft.rpy2_setup import init_rpy2_on_main_thread
 from rag.engine import RAGEngine
 from rag.ollama_client import OllamaError
 
@@ -27,6 +29,16 @@ st.caption(
 )
 
 engine = RAGEngine()
+
+
+@st.cache_resource
+def _rpy2_ready() -> bool:
+    """Initialize rpy2 once on Streamlit's main thread (required for Mock Draft)."""
+    init_rpy2_on_main_thread()
+    return True
+
+
+_rpy2_ready()
 
 with st.sidebar:
     st.header("System status")
@@ -56,49 +68,55 @@ with st.sidebar:
     st.caption(f"API: {settings.api_base_url}")
     st.caption(f"Ollama: {settings.ollama_base_url}")
 
-query = st.text_input(
-    "Ask about players, matchups, injuries, or fantasy scoring",
-    placeholder="e.g. How many targets did Ja'Marr Chase have in 2024?",
-)
+ask_tab, draft_tab = st.tabs(["Ask StatShift", "Mock Draft"])
 
-col1, col2 = st.columns([1, 4])
-with col1:
-    run = st.button("Run RAG", type="primary", use_container_width=True)
-with col2:
-    show_prompt = st.checkbox("Show prompt sent to Gemma")
-
-if run and query.strip():
-    with st.spinner("Routing your question..."):
-        try:
-            result = engine.ask(query.strip())
-            st.session_state["last_result"] = result
-        except OllamaError as exc:
-            st.error(str(exc))
-        except Exception as exc:
-            st.error(f"RAG failed: {exc}")
-
-result = st.session_state.get("last_result")
-if result:
-    route_label = "API (database)" if result.route == "api" else "Gemma (chat)"
-    st.caption(
-        f"Route: **{route_label}** · intent: `{result.intent.value}` — {result.intent_reason}"
+with ask_tab:
+    query = st.text_input(
+        "Ask about players, matchups, injuries, or fantasy scoring",
+        placeholder="e.g. How many targets did Ja'Marr Chase have in 2024?",
     )
 
-    st.subheader("Answer")
-    st.markdown(result.answer)
+    col1, col2 = st.columns([1, 4])
+    with col1:
+        run = st.button("Run RAG", type="primary", use_container_width=True)
+    with col2:
+        show_prompt = st.checkbox("Show prompt sent to Gemma")
 
-    st.subheader("Retrieved sources")
-    if not result.sources:
-        st.caption("No API retrieval for this route.")
-    for doc in result.sources:
-        with st.expander(f"[{doc['id']}] {doc['title']} · {doc['category']}"):
-            st.write(doc["content"])
+    if run and query.strip():
+        with st.spinner("Routing your question..."):
+            try:
+                result = engine.ask(query.strip())
+                st.session_state["last_result"] = result
+            except OllamaError as exc:
+                st.error(str(exc))
+            except Exception as exc:
+                st.error(f"RAG failed: {exc}")
 
-    if show_prompt and result.prompt:
-        st.subheader("Prompt")
-        st.code(result.prompt)
-    elif show_prompt and result.route == "api":
-        st.caption("No Gemma prompt — this answer came directly from API search results.")
+    result = st.session_state.get("last_result")
+    if result:
+        route_label = "API (database)" if result.route == "api" else "Gemma (chat)"
+        st.caption(
+            f"Route: **{route_label}** · intent: `{result.intent.value}` — {result.intent_reason}"
+        )
 
-elif run and not query.strip():
-    st.warning("Enter a question first.")
+        st.subheader("Answer")
+        st.markdown(result.answer)
+
+        st.subheader("Retrieved sources")
+        if not result.sources:
+            st.caption("No API retrieval for this route.")
+        for doc in result.sources:
+            with st.expander(f"[{doc['id']}] {doc['title']} · {doc['category']}"):
+                st.write(doc["content"])
+
+        if show_prompt and result.prompt:
+            st.subheader("Prompt")
+            st.code(result.prompt)
+        elif show_prompt and result.route == "api":
+            st.caption("No Gemma prompt — this answer came directly from API search results.")
+
+    elif run and not query.strip():
+        st.warning("Enter a question first.")
+
+with draft_tab:
+    render_mock_draft_tab()

@@ -4,5 +4,7 @@ __pycache__/
 .env
 data/*.db
 data/*.db-*
+data/espn_active_players.json
+data/ffanalytics_players.json
 .DS_Store
 .streamlit/secrets.toml

@@ -12,6 +12,8 @@ Factual questions (stats, matchups, injuries) are answered from the database. Co
 - **Docker (recommended):** Docker Desktop or Docker Engine with Compose v2
 - **Or local Python 3.11+** and [Ollama](https://ollama.com) with Gemma (`ollama pull gemma2:2b`)
 
+The Docker image includes R, [ffanalytics](https://github.com/FantasyFootballAnalytics/ffanalytics), and `rpy2` for the Mock Draft tab — no separate R install when using Compose.
+
 ## Run with Docker
 
 ```bash
@@ -77,13 +79,33 @@ Open http://127.0.0.1:8501 and ask about players, weekly matchups, injuries, or 
 
 If you previously ran an older build with different seed data, delete `data/statshift.db` or run `docker compose down -v` before re-initializing.
 
+## Mock Draft (Docker Compose)
+
+With the stack running (`docker compose up --build`), open **http://localhost:8501** → **Mock Draft**. The player pool comes from **ffanalytics** (projections for Standard / Half-PPR / PPR plus ADP). R and ffanalytics are already in the `ui` image.
+
+The cache lives in the **`statshift_data` volume** at `/app/data/ffanalytics_players.json` (24-hour TTL). It survives container restarts until you run `docker compose down -v`.
+
+**First visit:** opening Mock Draft or clicking **Refresh player pool** triggers a scrape (often several minutes). **Later visits** use the cache.
+
+Optional — pre-warm the cache before using the UI:
+
+```bash
+# One-off sync service (stack does not need to be up)
+docker compose --profile sync run --rm ffanalytics-sync
+
+# Or, while ui is running
+docker compose exec ui python scripts/sync_ffanalytics_players.py
+```
+
+After rebuilding the image (`docker compose up --build`), run a sync again if ffanalytics or R packages changed.
+
 ## Tests
 
 ```bash
 python -m unittest discover -s tests -v
 ```
 
-CI runs the same suite on pull requests and pushes to `main`.
+CI runs the same suite on pull requests and pushes to `main` (ffanalytics parsing tests do not call R).
 
 ## Configuration
 
