@@ -23,7 +23,8 @@ services:
     ports:
       - "11434:11434"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://127.0.0.1:11434/"]
+      # ollama/ollama has no curl; use the bundled CLI against the local server
+      test: ["CMD", "ollama", "list"]
       interval: 10s
       timeout: 5s
       retries: 10
