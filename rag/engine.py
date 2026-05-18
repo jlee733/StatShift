@@ -1,13 +1,14 @@
-"""RAG orchestration: retrieve from API, generate with Ollama/Gemma."""
+"""RAG orchestration: route by intent to API retrieval or Gemma chat."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 
 from config import settings
+from rag.intent import IntentResult, PromptIntent, detect_prompt_intent
 from rag.ollama_client import OllamaClient, OllamaError
 
 
@@ -15,11 +16,17 @@ class APIError(RuntimeError):
     pass
 
 
+Route = Literal["api", "gemma"]
+
+
 @dataclass
 class RAGResult:
     answer: str
     sources: list[dict[str, Any]]
     prompt: str
+    intent: PromptIntent
+    route: Route
+    intent_reason: str
 
 
 class RAGEngine:
@@ -57,29 +64,58 @@ class RAGEngine:
         return "\n\n".join(blocks)
 
     @staticmethod
-    def _build_prompt(query: str, context: str) -> str:
-        return f"""You are StatShift, a local basketball analytics assistant.
-Answer using ONLY the context below. If the context is insufficient, say what is missing.
-Keep answers concise and cite source numbers like [1] when you use a fact.
+    def _answer_from_sources(sources: list[dict[str, Any]]) -> str:
+        if not sources:
+            return (
+                "No matching records were found in the StatShift database for that question. "
+                "Try rephrasing with a player, team, week, or season."
+            )
+        lines = ["Based on stored records:\n"]
+        for idx, doc in enumerate(sources, start=1):
+            lines.append(
+                f"[{idx}] **{doc['title']}** ({doc['category']})\n{doc['content']}"
+            )
+        return "\n\n".join(lines)
 
-Context:
-{context}
+    @staticmethod
+    def _build_conversational_prompt(query: str) -> str:
+        return f"""You are StatShift, a friendly fantasy football analytics assistant.
+Answer the user's message helpfully. You may use general NFL and fantasy football knowledge.
+If they ask for specific stats from the StatShift database, suggest they ask a direct factual question.
 
-Question: {query}
+User: {query}
 
-Answer:"""
+Assistant:"""
 
-    def ask(self, query: str) -> RAGResult:
-        sources = self._search(query)
-        context = self._format_context(sources)
-        prompt = self._build_prompt(query, context)
+    def ask(self, query: str, *, intent: IntentResult | None = None) -> RAGResult:
+        resolved = intent or detect_prompt_intent(query)
+
+        if resolved.intent == PromptIntent.DEFINITIVE:
+            sources = self._search(query)
+            return RAGResult(
+                answer=self._answer_from_sources(sources),
+                sources=sources,
+                prompt="",
+                intent=resolved.intent,
+                route="api",
+                intent_reason=resolved.reason,
+            )
+
+        prompt = self._build_conversational_prompt(query)
         try:
             answer = self.ollama.generate(prompt)
         except httpx.HTTPError as exc:
             raise OllamaError(
                 "Could not reach Ollama. Start it locally and ensure Gemma is pulled."
             ) from exc
-        return RAGResult(answer=answer, sources=sources, prompt=prompt)
+        return RAGResult(
+            answer=answer,
+            sources=[],
+            prompt=prompt,
+            intent=resolved.intent,
+            route="gemma",
+            intent_reason=resolved.reason,
+        )
 
     def health(self) -> dict[str, Any]:
         api_ok = False

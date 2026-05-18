@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 import httpx
 
 from rag.engine import APIError, RAGEngine
+from rag.intent import IntentResult, PromptIntent
 from rag.ollama_client import OllamaClient, OllamaError
 
 
@@ -37,56 +38,81 @@ class RAGEngineTests(unittest.TestCase):
         self.assertIn("[2] Doc B (player)", context)
         self.assertIn("Line one.", context)
 
-    def test_build_prompt_includes_query_and_context(self) -> None:
-        prompt = RAGEngine._build_prompt("Who led scoring?", "ctx block")
+    def test_answer_from_sources_empty(self) -> None:
+        answer = RAGEngine._answer_from_sources([])
+        self.assertIn("No matching records", answer)
+
+    def test_answer_from_sources_includes_content(self) -> None:
+        sources = [
+            {
+                "title": "Ja'Marr Chase 2024 target share",
+                "category": "player",
+                "content": "175 targets",
+            },
+        ]
+        answer = RAGEngine._answer_from_sources(sources)
+        self.assertIn("175 targets", answer)
+        self.assertIn("Chase", answer)
+
+    def test_build_conversational_prompt_includes_query(self) -> None:
+        prompt = RAGEngine._build_conversational_prompt("Tell me a fun fact")
+        self.assertIn("Tell me a fun fact", prompt)
         self.assertIn("StatShift", prompt)
-        self.assertIn("ctx block", prompt)
-        self.assertIn("Who led scoring?", prompt)
 
     @patch("rag.engine.httpx.get")
-    def test_ask_returns_rag_result(self, mock_get: MagicMock) -> None:
+    def test_ask_definitive_uses_api_not_gemma(self, mock_get: MagicMock) -> None:
         mock_get.return_value = MagicMock(
             raise_for_status=MagicMock(),
             json=MagicMock(
                 return_value=[
                     {
                         "id": 1,
-                        "title": "Curry splits",
+                        "title": "Ja'Marr Chase 2024 target share",
                         "category": "player",
-                        "content": "26.4 PPG",
+                        "content": "175 targets",
                     }
                 ]
             ),
         )
-        self.mock_ollama.generate.return_value = "Curry averaged 26.4 PPG [1]."
+        intent = IntentResult(PromptIntent.DEFINITIVE, reason="test")
 
-        result = self.engine.ask("How did Curry score?")
+        result = self.engine.ask("How many targets did Chase have?", intent=intent)
 
-        self.assertEqual(result.answer, "Curry averaged 26.4 PPG [1].")
+        self.assertEqual(result.route, "api")
+        self.assertIn("175 targets", result.answer)
         self.assertEqual(len(result.sources), 1)
-        self.assertIn("Curry splits", result.prompt)
-        mock_get.assert_called_once_with(
-            "http://api.test/search",
-            params={"q": "How did Curry score?", "limit": 2},
-            timeout=15.0,
-        )
+        self.assertEqual(result.prompt, "")
+        mock_get.assert_called_once()
+        self.mock_ollama.generate.assert_not_called()
+
+    @patch("rag.engine.httpx.get")
+    def test_ask_conversational_uses_gemma_not_api(self, mock_get: MagicMock) -> None:
+        self.mock_ollama.generate.return_value = "Fantasy football is a weekly game."
+        intent = IntentResult(PromptIntent.CONVERSATIONAL, reason="test")
+
+        result = self.engine.ask("Hello!", intent=intent)
+
+        self.assertEqual(result.route, "gemma")
+        self.assertEqual(result.answer, "Fantasy football is a weekly game.")
+        self.assertEqual(result.sources, [])
+        self.assertIn("Hello!", result.prompt)
+        mock_get.assert_not_called()
         self.mock_ollama.generate.assert_called_once()
 
     @patch("rag.engine.httpx.get")
     def test_search_api_error_raises(self, mock_get: MagicMock) -> None:
         mock_get.side_effect = httpx.ConnectError("refused")
+        intent = IntentResult(PromptIntent.DEFINITIVE, reason="test")
         with self.assertRaises(APIError):
-            self.engine.ask("test")
+            self.engine.ask("How many yards did Burrow throw for?", intent=intent)
 
     @patch("rag.engine.httpx.get")
     def test_ask_ollama_error_wrapped(self, mock_get: MagicMock) -> None:
-        mock_get.return_value = MagicMock(
-            raise_for_status=MagicMock(),
-            json=MagicMock(return_value=[]),
-        )
         self.mock_ollama.generate.side_effect = httpx.ConnectError("down")
+        intent = IntentResult(PromptIntent.CONVERSATIONAL, reason="test")
         with self.assertRaises(OllamaError):
-            self.engine.ask("test")
+            self.engine.ask("Hi there", intent=intent)
+        mock_get.assert_not_called()
 
     @patch("rag.engine.httpx.get")
     def test_health_reports_status(self, mock_get: MagicMock) -> None:

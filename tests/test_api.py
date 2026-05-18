@@ -51,17 +51,17 @@ class APITests(DatabaseTestCase):
         self.assertEqual(response.status_code, 404)
 
     def test_search(self) -> None:
-        response = self.client.get("/search", params={"q": "Curry", "limit": 5})
+        response = self.client.get("/search", params={"q": "Chase", "limit": 5})
         self.assertEqual(response.status_code, 200)
         results = response.json()
         self.assertTrue(results)
-        self.assertIn("Curry", results[0]["title"])
+        self.assertIn("Chase", results[0]["title"])
 
     def test_categories(self) -> None:
         response = self.client.get("/categories")
         self.assertEqual(response.status_code, 200)
         categories = response.json()["categories"]
-        self.assertIn("league", categories)
+        self.assertIn("matchup", categories)
 
     def test_write_methods_blocked(self) -> None:
         for method in ("post", "put", "patch", "delete"):

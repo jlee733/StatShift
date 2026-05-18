@@ -1,4 +1,4 @@
-"""Thin client for local Ollama (Gemma) inference."""
+"""Thin client for local Ollama inference (Gemma by default)."""
 
 from __future__ import annotations
 

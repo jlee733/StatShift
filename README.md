@@ -1,9 +1,11 @@
 # StatShift
 
-Local-only RAG stack matching the architecture diagram:
+Local fantasy football statistics assistant. Query seeded NFL/fantasy data through a read-only API, or chat with a local LLM for open-ended analysis.
 
 **Streamlit** → **RAG** → **FastAPI (read-only)** → **SQLite**  
 **RAG** → **Ollama** → **Gemma**
+
+Factual questions (stats, matchups, injuries) are answered from the database. Conversational prompts go to Gemma.
 
 ## Prerequisites
 
@@ -11,8 +13,6 @@ Local-only RAG stack matching the architecture diagram:
 - **Or local Python 3.11+** and [Ollama](https://ollama.com) with Gemma (`ollama pull gemma2:2b`)
 
 ## Run with Docker
-
-Yes — you interact with Streamlit in your **browser on your machine**. The UI container listens on `0.0.0.0:8501` and Compose publishes it to `localhost:8501`. Buttons, text input, and reruns all work normally; only the server runs inside Docker.
 
 ```bash
 docker compose up --build
@@ -28,7 +28,7 @@ Optional: API docs at http://localhost:8000/docs
 # Stop
 docker compose down
 
-# Reset DB + models
+# Reset DB + models (re-seeds fantasy football sample data)
 docker compose down -v
 ```
 
@@ -40,7 +40,7 @@ Services:
 | `api` | FastAPI read-only API | 8000 |
 | `ollama` | Gemma inference | 11434 |
 
-Inside the Compose network, the UI talks to `http://api:8000` and `http://ollama:11434`. You do not need to call those from the browser.
+Inside the Compose network, the UI talks to `http://api:8000` and `http://ollama:11434`.
 
 ## Local setup (without Docker)
 
@@ -73,7 +73,17 @@ chmod +x scripts/run_api.sh scripts/run_ui.sh
 ./scripts/run_ui.sh
 ```
 
-Open http://127.0.0.1:8501 and ask questions about the seeded basketball stats.
+Open http://127.0.0.1:8501 and ask about players, weekly matchups, injuries, or PPR scoring from the seeded data.
+
+If you previously ran an older build with different seed data, delete `data/statshift.db` or run `docker compose down -v` before re-initializing.
+
+## Tests
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+CI runs the same suite on pull requests and pushes to `main`.
 
 ## Configuration
 
@@ -96,3 +106,13 @@ API_BASE_URL=http://127.0.0.1:8000
 | `GET /categories` | Distinct categories |
 
 `POST`, `PUT`, `PATCH`, and `DELETE` return **405** — writes are blocked at the API layer; SQLite is opened in read-only mode for queries.
+
+## Sample data categories
+
+| Category | Examples |
+|----------|----------|
+| `player` | McCaffrey workload, Chase targets, Kelce red-zone usage |
+| `team` | Bills pace and scoring |
+| `matchup` | Week 12 RB defensive matchups |
+| `injury` | Week 15 practice reports |
+| `league` | PPR scoring, passing leaders |

@@ -23,23 +23,29 @@ class ReadOnlyDatabaseTests(DatabaseTestCase):
         self.assertIsNotNone(doc)
         assert doc is not None
         self.assertEqual(doc["id"], 1)
-        self.assertIn("Lakers", doc["title"])
+        self.assertIn("McCaffrey", doc["title"])
 
     def test_get_document_missing_returns_none(self) -> None:
         self.assertIsNone(self.db.get_document(99999))
 
     def test_search_finds_relevant_document(self) -> None:
-        results = self.db.search_documents("Wembanyama", limit=5)
+        results = self.db.search_documents("Chase", limit=5)
         self.assertTrue(results)
         self.assertTrue(
-            any("Wembanyama" in doc["title"] or "Wembanyama" in doc["content"] for doc in results)
+            any("Chase" in doc["title"] or "Chase" in doc["content"] for doc in results)
         )
 
-    def test_search_empty_query_uses_like_fallback(self) -> None:
-        results = self.db.search_documents("Lakers", limit=3)
+    def test_search_team_content(self) -> None:
+        results = self.db.search_documents("Bills", limit=3)
         self.assertLessEqual(len(results), 3)
 
     def test_list_categories(self) -> None:
         categories = self.db.list_categories()
         self.assertIn("player", categories)
-        self.assertIn("team", categories)
+        self.assertIn("matchup", categories)
+
+
+if __name__ == "__main__":
+    import unittest
+
+    unittest.main()

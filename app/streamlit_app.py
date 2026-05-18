@@ -22,7 +22,9 @@ st.set_page_config(
 )
 
 st.title("StatShift")
-st.caption("Local prototype — Streamlit → RAG → FastAPI (read-only) → SQLite → Ollama/Gemma")
+st.caption(
+    "Fantasy football stats — Streamlit → RAG → FastAPI (read-only) → SQLite → Ollama/Gemma"
+)
 
 engine = RAGEngine()
 
@@ -55,8 +57,8 @@ with st.sidebar:
     st.caption(f"Ollama: {settings.ollama_base_url}")
 
 query = st.text_input(
-    "Ask about players, teams, or league stats",
-    placeholder="e.g. How did Victor Wembanyama perform in 2024-25?",
+    "Ask about players, matchups, injuries, or fantasy scoring",
+    placeholder="e.g. How many targets did Ja'Marr Chase have in 2024?",
 )
 
 col1, col2 = st.columns([1, 4])
@@ -66,7 +68,7 @@ with col2:
     show_prompt = st.checkbox("Show prompt sent to Gemma")
 
 if run and query.strip():
-    with st.spinner("Retrieving context and generating answer..."):
+    with st.spinner("Routing your question..."):
         try:
             result = engine.ask(query.strip())
             st.session_state["last_result"] = result
@@ -77,17 +79,26 @@ if run and query.strip():
 
 result = st.session_state.get("last_result")
 if result:
+    route_label = "API (database)" if result.route == "api" else "Gemma (chat)"
+    st.caption(
+        f"Route: **{route_label}** · intent: `{result.intent.value}` — {result.intent_reason}"
+    )
+
     st.subheader("Answer")
     st.markdown(result.answer)
 
     st.subheader("Retrieved sources")
+    if not result.sources:
+        st.caption("No API retrieval for this route.")
     for doc in result.sources:
         with st.expander(f"[{doc['id']}] {doc['title']} · {doc['category']}"):
             st.write(doc["content"])
 
-    if show_prompt:
+    if show_prompt and result.prompt:
         st.subheader("Prompt")
         st.code(result.prompt)
+    elif show_prompt and result.route == "api":
+        st.caption("No Gemma prompt — this answer came directly from API search results.")
 
 elif run and not query.strip():
     st.warning("Enter a question first.")
