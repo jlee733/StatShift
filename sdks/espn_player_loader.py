@@ -9,9 +9,24 @@ from typing import Any
 import httpx
 
 CORE_API_BASE = "https://sports.core.api.espn.com/v2/sports/football/leagues/nfl"
+CFB_API_BASE = "https://sports.core.api.espn.com/v2/sports/football/leagues/college-football"
 SITE_API_BASE = "https://site.api.espn.com/apis/site/v2/sports/football/nfl"
 COMMON_SEARCH_URL = "https://site.api.espn.com/apis/common/v3/search"
 TIMEOUT = 30.0
+
+_COLLEGE_STAT_FIELDS: dict[str, str] = {
+    "gamesPlayed": "games_played",
+    "completions": "completions",
+    "netPassingYards": "passing_yards",
+    "passingTouchdowns": "passing_tds",
+    "interceptions": "interceptions",
+    "rushingAttempts": "rush_attempts",
+    "rushingYards": "rushing_yards",
+    "rushingTouchdowns": "rushing_tds",
+    "receptions": "receptions",
+    "receivingYards": "receiving_yards",
+    "receivingTouchdowns": "receiving_tds",
+}
 
 
 @dataclass
@@ -27,9 +42,27 @@ class PlayerProfile:
     birth_date: str
     college: str
     draft_info: str
+    draft_year: int | None
     experience: int
     headshot_url: str
     status: str
+
+
+@dataclass
+class CollegeSeasonStats:
+    season: int
+    team: str
+    games_played: str
+    completions: str
+    passing_yards: str
+    passing_tds: str
+    interceptions: str
+    rush_attempts: str
+    rushing_yards: str
+    rushing_tds: str
+    receptions: str
+    receiving_yards: str
+    receiving_tds: str
 
 
 @dataclass
@@ -117,6 +150,81 @@ def _format_weight(pounds: int | None) -> str:
     if not pounds:
         return "—"
     return f"{pounds} lbs"
+
+
+def nfl_season_has_started(season_year: int, *, now: datetime | None = None) -> bool:
+    """Return True if the NFL regular season for season_year has begun."""
+    now = now or datetime.now()
+    if now.year > season_year:
+        return True
+    if now.year < season_year:
+        return False
+    return now.month >= 9
+
+
+def is_upcoming_rookie(draft_year: int | None, *, now: datetime | None = None) -> bool:
+    """True when drafted this calendar year and that NFL season has not started."""
+    now = now or datetime.now()
+    if draft_year is None:
+        return False
+    return draft_year == now.year and not nfl_season_has_started(draft_year, now=now)
+
+
+def _resolve_ref_field(ref_obj: Any, *, name_keys: tuple[str, ...] = ("name", "displayName", "abbreviation")) -> str:
+    """Resolve a display name from an embedded object or ESPN $ref."""
+    if not ref_obj:
+        return "—"
+    if isinstance(ref_obj, dict):
+        for key in name_keys:
+            value = ref_obj.get(key)
+            if value:
+                return str(value)
+        ref_url = ref_obj.get("$ref")
+        if ref_url:
+            try:
+                data = _get_json(ref_url)
+            except httpx.HTTPError:
+                return "—"
+            for key in name_keys:
+                value = data.get(key)
+                if value:
+                    return str(value)
+    return "—"
+
+
+def _stat_display_value(categories: list[dict], stat_name: str) -> str:
+    for cat in categories:
+        for stat in cat.get("stats", []):
+            if stat.get("name") == stat_name:
+                return str(stat.get("displayValue", stat.get("value", "—")))
+    return "—"
+
+
+def _empty_college_season(season: int, team: str = "") -> CollegeSeasonStats:
+    return CollegeSeasonStats(
+        season=season,
+        team=team,
+        games_played="—",
+        completions="—",
+        passing_yards="—",
+        passing_tds="—",
+        interceptions="—",
+        rush_attempts="—",
+        rushing_yards="—",
+        rushing_tds="—",
+        receptions="—",
+        receiving_yards="—",
+        receiving_tds="—",
+    )
+
+
+def _college_season_from_categories(season: int, team: str, categories: list[dict]) -> CollegeSeasonStats:
+    row = _empty_college_season(season, team)
+    for stat_name, attr in _COLLEGE_STAT_FIELDS.items():
+        value = _stat_display_value(categories, stat_name)
+        if value != "—":
+            setattr(row, attr, value)
+    return row
 
 
 def _team_from_search_item(item: dict[str, Any]) -> str:
@@ -214,7 +322,9 @@ def get_player_profile(player_id: str) -> PlayerProfile | None:
     
     draft = data.get("draft", {})
     draft_info = "—"
+    draft_year: int | None = None
     if draft:
+        draft_year = draft.get("year")
         year = draft.get("year", "")
         round_num = draft.get("round", "")
         pick = draft.get("selection", "")
@@ -231,12 +341,68 @@ def get_player_profile(player_id: str) -> PlayerProfile | None:
         weight=_format_weight(weight_pounds),
         age=age,
         birth_date=birth_date[:10] if birth_date else "—",
-        college=_safe_get(data, "college", "name", default="—"),
+        college=_resolve_ref_field(data.get("college")),
         draft_info=draft_info,
+        draft_year=int(draft_year) if draft_year else None,
         experience=data.get("experience", {}).get("years", 0),
         headshot_url=_safe_get(data, "headshot", "href", default=""),
         status=_safe_get(data, "status", "name", default="Active"),
     )
+
+
+def get_player_college_stats(player_id: str) -> list[CollegeSeasonStats]:
+    """Fetch season-by-season college statistics for an NFL player."""
+    try:
+        athlete = _get_json(f"{CORE_API_BASE}/athletes/{player_id}")
+    except httpx.HTTPError:
+        return []
+
+    college_athlete_ref = _safe_get(athlete, "collegeAthlete", "$ref", default="")
+    if not college_athlete_ref:
+        return []
+
+    athlete_id = college_athlete_ref.rstrip("/").split("/athletes/")[-1].split("?")[0]
+    try:
+        log_data = _get_json(f"{CFB_API_BASE}/athletes/{athlete_id}/statisticslog")
+    except httpx.HTTPError:
+        return []
+
+    seasons: list[CollegeSeasonStats] = []
+    for entry in log_data.get("entries", []):
+        season_ref = _safe_get(entry, "season", "$ref", default="")
+        if not season_ref or "/seasons/" not in season_ref:
+            continue
+        try:
+            season_year = int(season_ref.split("/seasons/")[1].split("?")[0])
+        except (IndexError, ValueError):
+            continue
+
+        stats_ref = ""
+        team_name = ""
+        for stat_entry in entry.get("statistics", []):
+            if stat_entry.get("type") == "total":
+                stats_ref = _safe_get(stat_entry, "statistics", "$ref", default="")
+            elif stat_entry.get("type") == "team" and not team_name:
+                team_ref = _safe_get(stat_entry, "team", "$ref", default="")
+                if team_ref:
+                    team_name = _resolve_ref_field({"$ref": team_ref}, name_keys=("abbreviation", "displayName", "name"))
+
+        if not stats_ref:
+            continue
+
+        try:
+            stats_data = _get_json(stats_ref)
+        except httpx.HTTPError:
+            continue
+
+        categories = _safe_get(stats_data, "splits", "categories", default=[])
+        if not categories:
+            continue
+
+        seasons.append(_college_season_from_categories(season_year, team_name, categories))
+
+    seasons.sort(key=lambda s: s.season, reverse=True)
+    return seasons
 
 
 def get_player_stats(player_id: str, season: int | None = None) -> list[SeasonStats]:

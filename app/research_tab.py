@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import html
+
 import matplotlib.pyplot as plt
 import numpy as np
 import streamlit as st
 
 from sdks.distribution_fit import fit_best_distribution, format_params_string
 from sdks.espn_player_loader import (
+    CollegeSeasonStats,
     CombineMetrics,
     GameLogEntry,
     InjuryInfo,
@@ -16,6 +19,7 @@ from sdks.espn_player_loader import (
     SeasonStats,
     calculate_fantasy_points,
     get_available_seasons,
+    get_player_college_stats,
     get_player_combine,
     get_player_gamelog,
     get_player_injuries,
@@ -23,6 +27,7 @@ from sdks.espn_player_loader import (
     get_player_profile,
     get_player_seasons,
     get_player_stats,
+    is_upcoming_rookie,
     search_players,
 )
 
@@ -37,17 +42,23 @@ def _init_research_state() -> None:
 def _render_search() -> None:
     """Render the player search section."""
     st.subheader("Search Players")
-    
-    col1, col2 = st.columns([4, 1])
-    with col1:
-        query = st.text_input(
-            "Enter player name",
-            placeholder="e.g. Patrick Mahomes",
-            label_visibility="collapsed",
-        )
-    with col2:
-        search_clicked = st.button("Search", type="primary", use_container_width=True)
-    
+
+    if not st.session_state.get("research_selected_player"):
+        st.info("Search for a player below to view their profile, stats, and news.")
+
+    with st.form("research_player_search", clear_on_submit=False):
+        col1, col2 = st.columns([4, 1])
+        with col1:
+            query = st.text_input(
+                "Enter player name",
+                placeholder="e.g. Patrick Mahomes",
+                label_visibility="collapsed",
+            )
+        with col2:
+            search_clicked = st.form_submit_button(
+                "Search", type="primary", use_container_width=True
+            )
+
     if search_clicked and query.strip():
         with st.spinner("Searching..."):
             results = search_players(query.strip())
@@ -56,7 +67,7 @@ def _render_search() -> None:
                 st.warning("No players found. Try a different search term.")
     
     results = st.session_state.get("research_search_results", [])
-    if results:
+    if results and not st.session_state.get("research_selected_player"):
         st.caption(f"Found {len(results)} active player(s)")
         
         for player in results:
@@ -73,7 +84,51 @@ def _render_search() -> None:
             with btn_col:
                 if st.button("Select", key=f"select_{player['id']}", use_container_width=True):
                     st.session_state["research_selected_player"] = player["id"]
+                    st.session_state["research_search_results"] = []
                     st.rerun()
+
+
+def _college_stats_to_rows(seasons: list[CollegeSeasonStats]) -> list[dict]:
+    """Convert college season stats to dataframe rows, omitting empty columns."""
+    columns = [
+        ("Season", "season"),
+        ("Team", "team"),
+        ("GP", "games_played"),
+        ("Cmp", "completions"),
+        ("Pass Yds", "passing_yards"),
+        ("Pass TD", "passing_tds"),
+        ("INT", "interceptions"),
+        ("Rush Att", "rush_attempts"),
+        ("Rush Yds", "rushing_yards"),
+        ("Rush TD", "rushing_tds"),
+        ("Rec", "receptions"),
+        ("Rec Yds", "receiving_yards"),
+        ("Rec TD", "receiving_tds"),
+    ]
+    raw_rows = []
+    for season in seasons:
+        raw_rows.append({label: getattr(season, attr) for label, attr in columns})
+
+    active_labels = ["Season"]
+    for label, _ in columns[1:]:
+        if any(row.get(label, "—") not in ("—", "0", "0.0", "") for row in raw_rows):
+            active_labels.append(label)
+
+    return [{label: row[label] for label in active_labels} for row in raw_rows]
+
+
+def _render_college_stats(profile: PlayerProfile) -> None:
+    """Show college stats table for pre-season rookies."""
+    with st.spinner("Loading college stats..."):
+        seasons = get_player_college_stats(profile.id)
+
+    if not seasons:
+        st.info("No college statistics available for this player.")
+        return
+
+    st.subheader("College stats")
+    rows = _college_stats_to_rows(seasons)
+    st.dataframe(rows, use_container_width=True, hide_index=True)
 
 
 def _render_profile_card(profile: PlayerProfile) -> None:
@@ -89,7 +144,11 @@ def _render_profile_card(profile: PlayerProfile) -> None:
             st.markdown("*No photo available*")
     
     with col2:
-        st.markdown(f"## {profile.name}")
+        rookie = is_upcoming_rookie(profile.draft_year)
+        name_line = f"## {profile.name}"
+        if rookie:
+            name_line += ' <span style="background:#F59E0B;color:#111;padding:2px 10px;border-radius:12px;font-size:0.45em;vertical-align:middle;margin-left:8px;">Rookie</span>'
+        st.markdown(name_line, unsafe_allow_html=True)
         st.markdown(f"**{profile.position}** | #{profile.jersey} | {profile.team}")
         
         info_col1, info_col2, info_col3 = st.columns(3)
@@ -106,6 +165,9 @@ def _render_profile_card(profile: PlayerProfile) -> None:
     
     status_color = "green" if profile.status == "Active" else "orange"
     st.markdown(f"**Status:** :{status_color}[{profile.status}]")
+
+    if is_upcoming_rookie(profile.draft_year):
+        _render_college_stats(profile)
 
 
 def _create_timeseries_chart(gamelog: list[GameLogEntry], scoring_key: str, scoring_label: str) -> plt.Figure:
@@ -349,7 +411,11 @@ def _render_news_tab(player_id: str) -> None:
                 st.markdown(f"### {article.headline}")
             
             if article.description:
-                st.markdown(article.description[:200] + "..." if len(article.description) > 200 else article.description)
+                st.markdown(
+                    f'<p style="font-size:0.9rem;line-height:1.4;word-break:break-word;">'
+                    f"{html.escape(article.description)}</p>",
+                    unsafe_allow_html=True,
+                )
             
             st.caption(article.published)
         
@@ -365,7 +431,6 @@ def render_research_tab() -> None:
     player_id = st.session_state.get("research_selected_player")
     
     if not player_id:
-        st.info("Search for a player above to view their profile, stats, and news.")
         return
     
     with st.spinner("Loading player profile..."):
@@ -378,6 +443,7 @@ def render_research_tab() -> None:
     
     if st.button("← Back to Search"):
         st.session_state["research_selected_player"] = None
+        st.session_state["research_search_results"] = []
         st.rerun()
     
     _render_profile_card(profile)

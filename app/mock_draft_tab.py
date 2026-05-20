@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import html
+
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 
@@ -35,10 +37,6 @@ def _position_colors(position: str) -> tuple[str, str]:
     return POSITION_COLORS.get(position, ("#374151", "#FFFFFF"))
 
 
-def _truncate_name(name: str, max_len: int = 14) -> str:
-    return name if len(name) <= max_len else name[: max_len - 1] + "…"
-
-
 def _player_pick_html(
     name: str,
     position: str,
@@ -49,14 +47,17 @@ def _player_pick_html(
     """HTML for a Sleeper-style colored pick cell."""
     bg, fg = _position_colors(position)
     border = "2px solid #FBBF24" if highlight else "1px solid rgba(255,255,255,0.15)"
-    team_line = f'<div style="font-size:0.75em;opacity:0.9;">{position}'
-    if team:
-        team_line += f" · {team}"
+    safe_name = html.escape(name)
+    safe_pos = html.escape(position)
+    safe_team = html.escape(team) if team else ""
+    team_line = f'<div class="player-meta">{safe_pos}'
+    if safe_team:
+        team_line += f" · {safe_team}"
     team_line += "</div>"
     return (
-        f'<div style="background:{bg};color:{fg};padding:6px 8px;border-radius:6px;'
-        f'border:{border};margin-bottom:4px;line-height:1.25;">'
-        f'<div style="font-weight:600;font-size:0.9em;">{_truncate_name(name)}</div>'
+        f'<div class="statshift-pick-cell" style="background:{bg};color:{fg};padding:6px 8px;'
+        f'border-radius:6px;border:{border};margin-bottom:4px;">'
+        f'<div class="player-name">{safe_name}</div>'
         f"{team_line}</div>"
     )
 
@@ -64,9 +65,9 @@ def _player_pick_html(
 def _on_clock_html(text: str, *, is_user: bool) -> str:
     bg = "#F59E0B" if is_user else "#4B5563"
     return (
-        f'<div style="background:{bg};color:#FFFFFF;padding:6px 8px;border-radius:6px;'
-        f'border:2px dashed #FBBF24;font-size:0.85em;font-weight:600;text-align:center;">'
-        f"{text}</div>"
+        f'<div class="statshift-on-clock" style="background:{bg};color:#FFFFFF;padding:6px 8px;'
+        f'border-radius:6px;border:2px dashed #FBBF24;">'
+        f"{html.escape(text)}</div>"
     )
 
 
@@ -177,11 +178,11 @@ def _render_sleeper_draft_board(draft: MockDraftEngine) -> None:
     header_cols = st.columns(num_teams)
     for i, col in enumerate(header_cols):
         team_name = draft.get_team_name(i)
-        short_name = _truncate_name(team_name, 16)
-        if i == user_team_idx:
-            col.markdown(f"**{short_name}** 🏈")
-        else:
-            col.markdown(f"**{short_name}**")
+        suffix = " 🏈" if i == user_team_idx else ""
+        col.markdown(
+            f'<div class="statshift-team-header">{html.escape(team_name)}{suffix}</div>',
+            unsafe_allow_html=True,
+        )
 
     for round_num in range(1, num_rounds + 1):
         row_cols = st.columns(num_teams)
@@ -196,13 +197,13 @@ def _render_sleeper_draft_board(draft: MockDraftEngine) -> None:
 
             if pick_data:
                 name, position, team = pick_data
-                html = _player_pick_html(
+                pick_html = _player_pick_html(
                     name,
                     position,
                     team,
                     highlight=is_user_team,
                 )
-                col.markdown(html, unsafe_allow_html=True)
+                col.markdown(pick_html, unsafe_allow_html=True)
             elif is_current_pick:
                 remaining = draft.time_remaining()
                 if draft.is_user_turn:

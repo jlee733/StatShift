@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from app.ui_styles import inject_global_styles
 from draft.rpy2_setup import init_rpy2_on_main_thread
 
 st.set_page_config(
@@ -28,6 +29,7 @@ def _rpy2_ready() -> bool:
 
 
 _rpy2_ready()
+inject_global_styles()
 
 VIEWS_DIR = Path(__file__).parent / "views"
 
