@@ -13,7 +13,7 @@ from config import settings
 
 app = FastAPI(
     title="StatShift API",
-    description="Local read-only API over SQLite. Write operations are blocked.",
+    description="Read-only fantasy football stats API over SQLite. Write operations are blocked.",
     version="0.1.0",
 )
 

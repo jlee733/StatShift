@@ -23,7 +23,8 @@ services:
     ports:
       - "11434:11434"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://127.0.0.1:11434/"]
+      # ollama/ollama has no curl; use the bundled CLI against the local server
+      test: ["CMD", "ollama", "list"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -37,7 +38,9 @@ services:
         condition: service_healthy
     environment:
       OLLAMA_HOST: http://ollama:11434
-    entrypoint: ["ollama", "pull", "gemma2:2b"]
+    volumes:
+      - ./scripts:/scripts:ro
+    entrypoint: ["/bin/sh", "/scripts/pull-ollama-models.sh"]
     restart: "no"
 
   ui:
@@ -46,7 +49,9 @@ services:
     environment:
       API_BASE_URL: http://api:8000
       OLLAMA_BASE_URL: http://ollama:11434
-      OLLAMA_MODEL: gemma2:2b
+      OLLAMA_MODEL: gemma2:latest
+    volumes:
+      - statshift_data:/app/data
     ports:
       - "8501:8501"
     depends_on:
@@ -57,6 +62,15 @@ services:
       ollama-pull:
         condition: service_completed_successfully
     restart: unless-stopped
+
+  # Optional: pre-warm mock-draft player cache (ffanalytics scrape; can take several minutes)
+  ffanalytics-sync:
+    profiles: [sync]
+    build: .
+    volumes:
+      - statshift_data:/app/data
+    entrypoint: ["python", "scripts/sync_ffanalytics_players.py"]
+    restart: "no"
 
 volumes:
   statshift_data:

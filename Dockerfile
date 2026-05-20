@@ -4,11 +4,29 @@ WORKDIR /app
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    R_HOME=/usr/lib/R
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl \
+    && apt-get install -y --no-install-recommends \
+        curl \
+        git \
+        r-base \
+        r-base-dev \
+        libcurl4-openssl-dev \
+        libssl-dev \
+        libxml2-dev \
     && rm -rf /var/lib/apt/lists/*
+
+# CRAN may not ship ffanalytics for the distro R version; install from GitHub.
+RUN Rscript -e '\
+  install.packages("remotes", repos = "https://cloud.r-project.org"); \
+  remotes::install_github( \
+    "FantasyFootballAnalytics/ffanalytics", \
+    upgrade = "never", \
+    dependencies = TRUE \
+  ) \
+'
 
 COPY requirements.txt .
 RUN pip install -r requirements.txt
@@ -16,6 +34,8 @@ RUN pip install -r requirements.txt
 COPY config.py .
 COPY api/ api/
 COPY rag/ rag/
+COPY draft/ draft/
+COPY sdks/ sdks/
 COPY app/ app/
 COPY scripts/ scripts/
 
