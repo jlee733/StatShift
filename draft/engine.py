@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+import random
 from dataclasses import dataclass, field
 
 from draft.models import (
@@ -10,6 +12,7 @@ from draft.models import (
     LeagueSettings,
     Player,
     Position,
+    RankingSource,
     ScoringFormat,
     TeamRoster,
 )
@@ -31,6 +34,13 @@ class MockDraftEngine:
     available: list[Player] = field(default_factory=list)
     requested_rounds: int = 15
     max_supported_rounds: int = 15
+    cpu_randomness: float = 0.35
+    cpu_top_k: int = 12
+    seed: int | None = None
+    ranking_source: RankingSource = RankingSource.YAHOO
+    _rng: random.Random = field(
+        init=False, repr=False, compare=False, default_factory=random.Random
+    )
 
     def __post_init__(self) -> None:
         if not self.pool:
@@ -41,6 +51,7 @@ class MockDraftEngine:
             key=lambda p: p.fantasy_points(self.settings.scoring),
             reverse=True,
         )
+        self._rng = random.Random(self.seed)
 
     @property
     def total_picks(self) -> int:
@@ -115,18 +126,36 @@ class MockDraftEngine:
 
         return need
 
+    def _candidate_score(self, player: Player, team_index: int) -> float:
+        roster = self.rosters[team_index]
+        scoring = self.settings.scoring
+        value = player.fantasy_points(scoring)
+        need = self._roster_need_score(roster, player)
+        rank = player.rank_for_source(self.ranking_source)
+        rank_bonus = max(0.0, (80.0 - rank) / 80.0) * 0.5
+        return value + need * 2.0 + rank_bonus
+
     def rank_available(self, team_index: int | None = None) -> list[Player]:
         idx = team_index if team_index is not None else self.current_team_index
-        roster = self.rosters[idx]
-        scoring = self.settings.scoring
+        return sorted(
+            self.available,
+            key=lambda p: self._candidate_score(p, idx),
+            reverse=True,
+        )
 
-        def score(player: Player) -> float:
-            value = player.fantasy_points(scoring)
-            need = self._roster_need_score(roster, player)
-            adp_bonus = max(0.0, (80.0 - player.adp) / 80.0) * 0.5
-            return value + need * 2.0 + adp_bonus
-
-        return sorted(self.available, key=score, reverse=True)
+    def _sample_cpu_pick(self, candidates: list[Player]) -> Player:
+        if not candidates:
+            raise RuntimeError("No candidates available")
+        if self.cpu_randomness <= 0.0 or len(candidates) == 1:
+            return candidates[0]
+        top_k = candidates[: max(1, self.cpu_top_k)]
+        team_idx = self.current_team_index
+        scores = [self._candidate_score(p, team_idx) for p in top_k]
+        top = scores[0]
+        # Softmax with temperature: 0.5 (near-deterministic) → 5.0 (nearly uniform)
+        temperature = 0.5 + self.cpu_randomness * 4.5
+        weights = [math.exp((s - top) / temperature) for s in scores]
+        return self._rng.choices(top_k, weights=weights, k=1)[0]
 
     def make_pick(self, player: Player) -> DraftPick:
         if self.is_complete:
@@ -151,7 +180,7 @@ class MockDraftEngine:
         ranked = self.rank_available()
         if not ranked:
             raise RuntimeError("No players available")
-        return self.make_pick(ranked[0])
+        return self.make_pick(self._sample_cpu_pick(ranked))
 
     def run_cpu_picks_until_user(self) -> list[DraftPick]:
         made: list[DraftPick] = []
@@ -164,6 +193,54 @@ class MockDraftEngine:
     def user_roster(self) -> TeamRoster:
         return self.rosters[self.settings.draft_slot - 1]
 
+    def _clone_for_simulation(self) -> MockDraftEngine:
+        """Lightweight copy that shares the immutable Player/pool references."""
+        clone = MockDraftEngine(
+            settings=self.settings,
+            pool=self.pool,
+            cpu_randomness=self.cpu_randomness,
+            cpu_top_k=self.cpu_top_k,
+            ranking_source=self.ranking_source,
+        )
+        clone.picks = list(self.picks)
+        clone.rosters = [
+            TeamRoster(team_index=r.team_index, picks=list(r.picks))
+            for r in self.rosters
+        ]
+        clone.available = list(self.available)
+        clone.requested_rounds = self.requested_rounds
+        clone.max_supported_rounds = self.max_supported_rounds
+        clone._rng = random.Random()
+        return clone
+
+    def simulate_availability_at_next_user_pick(
+        self, *, num_sims: int = 40
+    ) -> dict[str, float]:
+        """
+        Monte Carlo: probability each currently-available player is still on the
+        board when the user is next on the clock.
+
+        Each sim clones the engine and runs CPU picks (with cpu_randomness) until
+        the user's next turn. If the user is currently on the clock, the sim
+        treats that as an auto-pick (so the result describes the *following* pick).
+        """
+        if self.is_complete or self.pool_exhausted:
+            return {p.name: 1.0 for p in self.available}
+
+        counts: dict[str, int] = {p.name: 0 for p in self.available}
+
+        for _ in range(num_sims):
+            sim = self._clone_for_simulation()
+            if sim.is_user_turn and not sim.pool_exhausted:
+                sim.auto_pick()
+            while not sim.is_complete and not sim.is_user_turn:
+                sim.auto_pick()
+            for player in sim.available:
+                if player.name in counts:
+                    counts[player.name] += 1
+
+        return {name: count / num_sims for name, count in counts.items()}
+
     @staticmethod
     def create(
         scoring: ScoringFormat,
@@ -172,6 +249,10 @@ class MockDraftEngine:
         rounds: int = 15,
         *,
         pool: list[Player] | None = None,
+        cpu_randomness: float = 0.35,
+        cpu_top_k: int = 12,
+        seed: int | None = None,
+        ranking_source: RankingSource = RankingSource.YAHOO,
     ) -> MockDraftEngine:
         player_pool = pool if pool is not None else get_players()
         if not player_pool:
@@ -186,7 +267,14 @@ class MockDraftEngine:
             draft_slot=draft_slot,
             rounds=effective_rounds,
         )
-        engine = MockDraftEngine(settings=settings, pool=player_pool)
+        engine = MockDraftEngine(
+            settings=settings,
+            pool=player_pool,
+            cpu_randomness=cpu_randomness,
+            cpu_top_k=cpu_top_k,
+            seed=seed,
+            ranking_source=ranking_source,
+        )
         engine.requested_rounds = rounds
         engine.max_supported_rounds = supported
         return engine

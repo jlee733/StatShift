@@ -8,6 +8,7 @@ from typing import Any
 
 from config import settings
 from draft.models import Player, Position
+from draft.sleeper_loader import get_sleeper_rankings, lookup_sleeper_rank
 
 CACHE_PATH = settings.project_root / "data" / "ffanalytics_players.json"
 CACHE_MAX_AGE_HOURS = 24
@@ -126,12 +127,31 @@ def _adp_from_row(row: dict[str, Any]) -> float | None:
     return sum(values) / len(values)
 
 
+def _per_source_adp_from_row(row: dict[str, Any]) -> dict[str, float]:
+    """Extract per-source ADP values from ffanalytics get_adp row."""
+    result: dict[str, float] = {}
+    
+    for key, raw in row.items():
+        key_lower = str(key).lower()
+        if key_lower.startswith("adp_"):
+            source = key_lower[4:]
+            val = _float_or(raw, 0.0)
+            if val > 0:
+                result[source] = val
+    
+    return result
+
+
 def parse_projection_row(
     row: dict[str, Any],
     *,
     points: float,
     adp_by_id: dict[str, float],
     adp_by_name: dict[str, float],
+    espn_adp_by_id: dict[str, float] | None = None,
+    espn_adp_by_name: dict[str, float] | None = None,
+    yahoo_adp_by_id: dict[str, float] | None = None,
+    yahoo_adp_by_name: dict[str, float] | None = None,
 ) -> Player | None:
     pos_raw = _pick_column(row, "pos", "position")
     if pos_raw is None:
@@ -146,11 +166,26 @@ def parse_projection_row(
 
     team = str(_pick_column(row, "team", "nfl_team") or "").strip()
     player_id = _pick_column(row, "id", "player_id")
+    pid_str = str(player_id) if player_id is not None else None
+    name_lower = name.lower()
+    
     adp = 999.0
-    if player_id is not None:
-        adp = adp_by_id.get(str(player_id), adp)
+    if pid_str is not None:
+        adp = adp_by_id.get(pid_str, adp)
     if adp >= 999.0:
-        adp = adp_by_name.get(name.lower(), adp)
+        adp = adp_by_name.get(name_lower, adp)
+
+    rank_espn = 999.0
+    if espn_adp_by_id and pid_str:
+        rank_espn = espn_adp_by_id.get(pid_str, rank_espn)
+    if rank_espn >= 999.0 and espn_adp_by_name:
+        rank_espn = espn_adp_by_name.get(name_lower, rank_espn)
+
+    rank_yahoo = 999.0
+    if yahoo_adp_by_id and pid_str:
+        rank_yahoo = yahoo_adp_by_id.get(pid_str, rank_yahoo)
+    if rank_yahoo >= 999.0 and yahoo_adp_by_name:
+        rank_yahoo = yahoo_adp_by_name.get(name_lower, rank_yahoo)
 
     pts = round(points, 1)
     return Player(
@@ -161,6 +196,9 @@ def parse_projection_row(
         fp_std=pts,
         team=team,
         adp=adp,
+        rank_espn=rank_espn,
+        rank_yahoo=rank_yahoo,
+        rank_sleeper=999.0,
     )
 
 
@@ -173,16 +211,39 @@ def merge_projection_tables(
     """Combine standard, half-PPR, and PPR projection rows into Player models."""
     adp_by_id: dict[str, float] = {}
     adp_by_name: dict[str, float] = {}
+    espn_adp_by_id: dict[str, float] = {}
+    espn_adp_by_name: dict[str, float] = {}
+    yahoo_adp_by_id: dict[str, float] = {}
+    yahoo_adp_by_name: dict[str, float] = {}
+    
     for row in adp_rows:
         pid = _pick_column(row, "id", "player_id")
         adp_val = _adp_from_row(row)
-        if adp_val is None:
-            continue
-        if pid is not None:
-            adp_by_id[str(pid)] = adp_val
+        per_source = _per_source_adp_from_row(row)
+        
+        pid_str = str(pid) if pid is not None else None
         name = _player_name_from_row(row)
-        if name:
-            adp_by_name[name.lower()] = adp_val
+        name_lower = name.lower() if name else None
+        
+        if adp_val is not None:
+            if pid_str:
+                adp_by_id[pid_str] = adp_val
+            if name_lower:
+                adp_by_name[name_lower] = adp_val
+        
+        espn_val = per_source.get("espn")
+        if espn_val is not None:
+            if pid_str:
+                espn_adp_by_id[pid_str] = espn_val
+            if name_lower:
+                espn_adp_by_name[name_lower] = espn_val
+        
+        yahoo_val = per_source.get("yahoo")
+        if yahoo_val is not None:
+            if pid_str:
+                yahoo_adp_by_id[pid_str] = yahoo_val
+            if name_lower:
+                yahoo_adp_by_name[name_lower] = yahoo_val
 
     def index_by_id(rows: list[dict[str, Any]]) -> dict[str, tuple[dict[str, Any], float]]:
         out: dict[str, tuple[dict[str, Any], float]] = {}
@@ -218,6 +279,10 @@ def merge_projection_tables(
             points=fp_ppr or fp_half or fp_std,
             adp_by_id=adp_by_id,
             adp_by_name=adp_by_name,
+            espn_adp_by_id=espn_adp_by_id,
+            espn_adp_by_name=espn_adp_by_name,
+            yahoo_adp_by_id=yahoo_adp_by_id,
+            yahoo_adp_by_name=yahoo_adp_by_name,
         )
         if player is None:
             continue
@@ -329,8 +394,22 @@ def _fetch_ffanalytics_players_impl(
         _r_dataframe_to_records(proj_ppr),
         _r_dataframe_to_records(adp_df),
     )
+    
+    _populate_sleeper_rankings(players)
+    
     players.sort(key=lambda p: p.fp_ppr, reverse=True)
     return players
+
+
+def _populate_sleeper_rankings(players: list[Player]) -> None:
+    """Fetch Sleeper rankings and populate rank_sleeper for each player."""
+    try:
+        sleeper_rankings = get_sleeper_rankings()
+    except Exception:
+        return
+    
+    for player in players:
+        player.rank_sleeper = lookup_sleeper_rank(player.name, sleeper_rankings)
 
 
 def save_player_cache(players: list[Player], path: Any = None) -> Any:
@@ -350,6 +429,9 @@ def save_player_cache(players: list[Player], path: Any = None) -> Any:
                 "fp_std": p.fp_std,
                 "team": p.team,
                 "adp": p.adp,
+                "rank_espn": p.rank_espn,
+                "rank_yahoo": p.rank_yahoo,
+                "rank_sleeper": p.rank_sleeper,
             }
             for p in players
         ],
@@ -379,6 +461,9 @@ def load_player_cache(path: Any = None) -> list[Player] | None:
                     fp_std=float(row["fp_std"]),
                     team=row.get("team", ""),
                     adp=float(row.get("adp", 999)),
+                    rank_espn=float(row.get("rank_espn", 999)),
+                    rank_yahoo=float(row.get("rank_yahoo", 999)),
+                    rank_sleeper=float(row.get("rank_sleeper", 999)),
                 )
             )
         except (KeyError, ValueError):

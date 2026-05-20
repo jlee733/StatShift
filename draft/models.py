@@ -12,6 +12,12 @@ class ScoringFormat(str, Enum):
     STANDARD = "Standard"
 
 
+class RankingSource(str, Enum):
+    YAHOO = "Yahoo"
+    ESPN = "ESPN"
+    SLEEPER = "Sleeper"
+
+
 class Position(str, Enum):
     QB = "QB"
     RB = "RB"
@@ -56,7 +62,10 @@ class Player:
     fp_half: float
     fp_std: float
     team: str = ""
-    adp: float = 99.0
+    adp: float = 999.0
+    rank_espn: float = 999.0
+    rank_yahoo: float = 999.0
+    rank_sleeper: float = 999.0
 
     def fantasy_points(self, scoring: ScoringFormat) -> float:
         if scoring == ScoringFormat.PPR:
@@ -64,6 +73,13 @@ class Player:
         if scoring == ScoringFormat.HALF_PPR:
             return self.fp_half
         return self.fp_std
+
+    def rank_for_source(self, source: RankingSource) -> float:
+        if source == RankingSource.ESPN:
+            return self.rank_espn
+        if source == RankingSource.YAHOO:
+            return self.rank_yahoo
+        return self.rank_sleeper
 
 
 @dataclass

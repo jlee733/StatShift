@@ -5,9 +5,9 @@ from __future__ import annotations
 import streamlit as st
 
 from draft.engine import MockDraftEngine
-from draft.ffanalytics_loader import load_active_players, load_player_cache
-from draft.models import ROSTER_SLOTS, ScoringFormat
-from draft.player_pool import cache_status, refresh_players
+from draft.ffanalytics_loader import cache_is_fresh, load_active_players, load_player_cache
+from draft.models import ROSTER_SLOTS, RankingSource, ScoringFormat
+from draft.player_pool import refresh_players
 from draft.rpy2_setup import rpy2_session
 
 
@@ -21,7 +21,7 @@ def _init_draft_state() -> None:
 def _ensure_player_pool(*, force_refresh: bool = False) -> list:
     if force_refresh:
         with rpy2_session():
-            with st.spinner("Loading players from ffanalytics…"):
+            with st.spinner("Loading players…"):
                 st.session_state["draft_pool"] = refresh_players(force_refresh=True)
     elif st.session_state.get("draft_pool") is None:
         # Use JSON cache only on tab open — avoid a long R scrape until user clicks Refresh
@@ -29,9 +29,11 @@ def _ensure_player_pool(*, force_refresh: bool = False) -> list:
     return st.session_state["draft_pool"]
 
 
-def _render_settings(pool_size: int) -> tuple[ScoringFormat, int, int, int] | None:
+def _render_settings(
+    pool_size: int,
+) -> tuple[ScoringFormat, int, int, int, float, RankingSource] | None:
     st.subheader("League settings")
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
 
     with col1:
         scoring_label = st.selectbox(
@@ -40,8 +42,16 @@ def _render_settings(pool_size: int) -> tuple[ScoringFormat, int, int, int] | No
             index=0,
         )
     with col2:
-        league_size = st.selectbox("League size", options=[8, 10, 12, 14], index=2)
+        ranking_options = [r.value for r in RankingSource]
+        ranking_label = st.selectbox(
+            "Rankings",
+            options=ranking_options,
+            index=0,
+            help="Consensus rankings source for CPU picks and best available.",
+        )
     with col3:
+        league_size = st.selectbox("League size", options=[8, 10, 12, 14], index=2)
+    with col4:
         draft_slot = st.number_input(
             "Your draft slot",
             min_value=1,
@@ -49,7 +59,7 @@ def _render_settings(pool_size: int) -> tuple[ScoringFormat, int, int, int] | No
             value=min(5, int(league_size)),
             step=1,
         )
-    with col4:
+    with col5:
         if pool_size:
             max_rounds = max(1, pool_size // max(int(league_size), 1))
         else:
@@ -63,12 +73,20 @@ def _render_settings(pool_size: int) -> tuple[ScoringFormat, int, int, int] | No
             disabled=pool_size == 0,
         )
 
-    scoring = ScoringFormat(scoring_label)
-    st.caption(
-        f"Player pool: **{pool_size}** ranked players (QB/RB/WR/TE/K) · "
-        f"up to **{max_rounds}** rounds for a **{league_size}**-team league"
+    cpu_randomness = st.slider(
+        "Draft unpredictability",
+        min_value=0.0,
+        max_value=1.0,
+        value=0.35,
+        step=0.05,
+        help="Higher values make other teams less predictable.",
     )
-    return scoring, int(league_size), int(draft_slot), int(rounds)
+
+    scoring = ScoringFormat(scoring_label)
+    ranking_source = RankingSource(ranking_label)
+    if pool_size:
+        st.caption(f"{pool_size} players · up to {max_rounds} rounds")
+    return scoring, int(league_size), int(draft_slot), int(rounds), float(cpu_randomness), ranking_source
 
 
 def _render_draft_board(draft: MockDraftEngine) -> None:
@@ -150,11 +168,15 @@ def _render_pick_controls(draft: MockDraftEngine) -> None:
         if not ranked:
             st.error("No players left in the pool.")
             return
-        options = {
-            f"{p.name} ({p.position.value}, {p.team}) — "
-            f"{p.fantasy_points(draft.settings.scoring):.1f} FPG": p
-            for p in ranked
-        }
+        options = {}
+        for p in ranked:
+            rank = p.rank_for_source(draft.ranking_source)
+            rank_str = f"#{int(rank)}" if rank < 999 else "—"
+            label = (
+                f"{rank_str} {p.name} ({p.position.value}, {p.team}) — "
+                f"{p.fantasy_points(draft.settings.scoring):.1f} FPG"
+            )
+            options[label] = p
         choice = st.selectbox("Select player", options=list(options.keys()))
         if st.button("Draft player", type="primary", use_container_width=True):
             draft.make_pick(options[choice])
@@ -169,45 +191,67 @@ def _render_pick_controls(draft: MockDraftEngine) -> None:
 
 def render_mock_draft_tab() -> None:
     _init_draft_state()
-    st.markdown(
-        "Configure scoring and league size, then run a **snake mock draft** with "
-        "**projections and ADP** from [ffanalytics](https://github.com/FantasyFootballAnalytics/ffanalytics) "
-        "(QB/RB/WR/TE/K)."
-    )
 
-    st.caption(cache_status())
-
-    refresh_col, _ = st.columns([1, 3])
-    with refresh_col:
-        if st.button("Refresh player pool from ffanalytics", use_container_width=True):
+    # Auto-load players if cache is missing or stale and not already attempted
+    if "auto_load_attempted" not in st.session_state:
+        st.session_state["auto_load_attempted"] = False
+    
+    if not st.session_state["auto_load_attempted"]:
+        if not cache_is_fresh():
+            st.session_state["auto_load_attempted"] = True
             try:
                 with rpy2_session():
-                    with st.spinner("Scraping projections and ADP via ffanalytics…"):
+                    with st.spinner("Loading player pool…"):
                         pool_loaded = load_active_players(force_refresh=True)
                         refresh_players(force_refresh=True)
                         st.session_state["draft_pool"] = pool_loaded
-                if not pool_loaded:
-                    st.error("ffanalytics returned no draftable players.")
-                else:
-                    st.success(f"Loaded {len(pool_loaded)} players.")
-                    st.rerun()
+                        st.session_state["players_loaded_successfully"] = True
             except Exception as exc:
-                st.error(f"ffanalytics sync failed: {exc}")
+                st.error(f"Could not auto-load players: {exc}")
+                st.session_state["players_loaded_successfully"] = False
+        else:
+            # Cache is fresh, just load from cache
+            st.session_state["auto_load_attempted"] = True
+            cached = load_player_cache()
+            if cached:
+                st.session_state["draft_pool"] = cached
+                st.session_state["players_loaded_successfully"] = True
 
     pool = _ensure_player_pool()
     pool_size = len(pool)
 
+    load_col, _ = st.columns([1, 3])
+    with load_col:
+        if st.button("Load players", use_container_width=True):
+            try:
+                with rpy2_session():
+                    with st.spinner("Loading player pool…"):
+                        pool_loaded = load_active_players(force_refresh=True)
+                        refresh_players(force_refresh=True)
+                        st.session_state["draft_pool"] = pool_loaded
+                        st.session_state["players_loaded_successfully"] = True
+                if not pool_loaded:
+                    st.error("No players were returned. Try again in a few minutes.")
+                    st.session_state["players_loaded_successfully"] = False
+                else:
+                    st.rerun()
+            except Exception as exc:
+                st.error(f"Could not load players: {exc}")
+                st.session_state["players_loaded_successfully"] = False
+                pool = _ensure_player_pool()
+                pool_size = len(pool)
+    
+    if st.session_state.get("players_loaded_successfully"):
+        st.success("Players successfully loaded!", icon="✅")
+
     if pool_size == 0:
-        st.warning(
-            "No player pool loaded. Click **Refresh player pool from ffanalytics** "
-            "(first run may take several minutes)."
-        )
+        st.info("Load players to start a mock draft.")
 
     settings = _render_settings(pool_size)
     if settings is None:
         return
 
-    scoring, league_size, draft_slot, rounds = settings
+    scoring, league_size, draft_slot, rounds, cpu_randomness, ranking_source = settings
 
     slot_cols = st.columns([1, 1, 2])
     with slot_cols[0]:
@@ -224,6 +268,8 @@ def render_mock_draft_tab() -> None:
                     draft_slot=draft_slot,
                     rounds=rounds,
                     pool=pool,
+                    cpu_randomness=cpu_randomness,
+                    ranking_source=ranking_source,
                 )
                 st.rerun()
             except ValueError as exc:
@@ -235,27 +281,14 @@ def render_mock_draft_tab() -> None:
 
     draft: MockDraftEngine | None = st.session_state.get("mock_draft")
     if draft is None:
-        st.info("Set your parameters and click **Start new draft**.")
-        st.markdown(
-            f"""
-            **Roster slots:** {", ".join(f"{k}×{v}" for k, v in ROSTER_SLOTS.items())}
-
-            **Player source:** ffanalytics projections + ADP (~{pool_size} players).
-            First load scrapes multiple sites and may take several minutes; cached 24 hours
-            in the `statshift_data` Docker volume (`data/ffanalytics_players.json`).
-            """
-        )
         return
 
     meta = draft.settings
-    rounds_note = f"{meta.rounds} rounds"
-    if draft.requested_rounds > meta.rounds:
-        rounds_note += f" (capped from {draft.requested_rounds}; pool limit)"
     st.caption(
-        f"{meta.scoring.value} · {meta.league_size} teams · "
-        f"slot {meta.draft_slot} · {rounds_note} · "
-        f"Pick {min(draft.current_overall, draft.total_picks)} of {draft.total_picks} · "
-        f"{len(draft.available)} players left"
+        f"{meta.scoring.value} · {draft.ranking_source.value} rankings · "
+        f"{meta.league_size} teams · pick {meta.draft_slot} · "
+        f"round {draft.current_round} · "
+        f"#{min(draft.current_overall, draft.total_picks)} of {draft.total_picks}"
     )
 
     board_col, roster_col = st.columns([3, 2])
@@ -267,7 +300,47 @@ def render_mock_draft_tab() -> None:
 
         st.subheader("Best available")
         for player in draft.rank_available()[:8]:
+            rank = player.rank_for_source(draft.ranking_source)
+            rank_str = f"#{int(rank)}" if rank < 999 else "—"
             st.write(
                 f"**{player.name}** ({player.position.value}, {player.team}) — "
-                f"{player.fantasy_points(draft.settings.scoring):.1f} FPG"
+                f"{player.fantasy_points(draft.settings.scoring):.1f} FPG · {rank_str}"
             )
+
+        _render_monte_carlo_lookahead(draft)
+
+
+def _render_monte_carlo_lookahead(draft: MockDraftEngine) -> None:
+    if draft.is_complete or draft.pool_exhausted or not draft.is_user_turn:
+        return
+
+    num_sims = 40
+    with st.spinner("Calculating pick outlook…"):
+        probabilities = draft.simulate_availability_at_next_user_pick(num_sims=num_sims)
+
+    ranked = draft.rank_available()[:10]
+    if not ranked:
+        return
+
+    rows = []
+    for player in ranked:
+        pct = probabilities.get(player.name, 0.0) * 100
+        rank = player.rank_for_source(draft.ranking_source)
+        rows.append(
+            {
+                "Player": player.name,
+                "Pos": player.position.value,
+                "Team": player.team,
+                "Rank": int(rank) if rank < 999 else "—",
+                "FPG": round(player.fantasy_points(draft.settings.scoring), 1),
+                "Avail next pick": f"{pct:.0f}%",
+                "_pct": pct,
+            }
+        )
+    
+    rows.sort(key=lambda r: r["_pct"], reverse=True)
+    for row in rows:
+        del row["_pct"]
+
+    st.subheader("Likely available next pick")
+    st.dataframe(rows, use_container_width=True, hide_index=True)
