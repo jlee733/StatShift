@@ -27,6 +27,17 @@ class Position(str, Enum):
     DEF = "DEF"
 
 
+# Sleeper-style position colors: (background, text)
+POSITION_COLORS: dict[str, tuple[str, str]] = {
+    "QB": ("#523C87", "#FFFFFF"),
+    "RB": ("#2E7D5E", "#FFFFFF"),
+    "WR": ("#2D7A4F", "#FFFFFF"),
+    "TE": ("#C75724", "#FFFFFF"),
+    "K": ("#6B6B6B", "#FFFFFF"),
+    "DEF": ("#C72424", "#FFFFFF"),
+}
+
+
 ROSTER_SLOTS: dict[str, int] = {
     "QB": 1,
     "RB": 2,
@@ -36,6 +47,29 @@ ROSTER_SLOTS: dict[str, int] = {
     "K": 1,
     "DEF": 1,
 }
+
+TEAM_NAME_POOL: list[str] = [
+    "Gridiron Gladiators",
+    "Sunday Scaries",
+    "The Algorithm",
+    "Waiver Wire Wizards",
+    "Trade Block Party",
+    "Bench Warmers",
+    "Fantasy Fiends",
+    "TD Chasers",
+    "Point Projectors",
+    "Sleeper Agents",
+    "Red Zone Rockets",
+    "Fourth Quarter Comeback",
+    "Bye Week Blues",
+    "Commissioner's Picks",
+    "Draft Day Disasters",
+    "Playoff Bound",
+    "Injury Reserve",
+    "Monday Night Mayhem",
+    "Touchdown Titans",
+    "Roster Roulette",
+]
 
 
 @dataclass(frozen=True)

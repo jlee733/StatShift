@@ -104,9 +104,12 @@ Assistant:"""
         prompt = self._build_conversational_prompt(query)
         try:
             answer = self.ollama.generate(prompt)
+        except OllamaError:
+            # Re-raise OllamaError as-is (already has specific message)
+            raise
         except httpx.HTTPError as exc:
             raise OllamaError(
-                "Could not reach Ollama. Start it locally and ensure Gemma is pulled."
+                f"Network error: {type(exc).__name__} - {str(exc)}"
             ) from exc
         return RAGResult(
             answer=answer,

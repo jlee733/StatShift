@@ -16,7 +16,7 @@ class OllamaClient:
         self,
         base_url: str | None = None,
         model: str | None = None,
-        timeout: float = 120.0,
+        timeout: float = 300.0,  # Increased to 5 minutes for initial model load
     ) -> None:
         self.base_url = (base_url or settings.ollama_base_url).rstrip("/")
         self.model = model or settings.ollama_model
@@ -37,20 +37,37 @@ class OllamaClient:
         return [m["name"] for m in payload.get("models", [])]
 
     def generate(self, prompt: str, *, temperature: float = 0.2) -> str:
-        response = httpx.post(
-            f"{self.base_url}/api/generate",
-            json={
-                "model": self.model,
-                "prompt": prompt,
-                "stream": False,
-                "options": {"temperature": temperature},
-            },
-            timeout=self.timeout,
-        )
-        if response.status_code == 404:
-            raise OllamaError(
-                f"Model '{self.model}' not found. Pull it with: ollama pull {self.model}"
+        try:
+            response = httpx.post(
+                f"{self.base_url}/api/generate",
+                json={
+                    "model": self.model,
+                    "prompt": prompt,
+                    "stream": False,
+                    "options": {"temperature": temperature},
+                },
+                timeout=self.timeout,
             )
-        response.raise_for_status()
-        data = response.json()
-        return (data.get("response") or "").strip()
+            if response.status_code == 404:
+                raise OllamaError(
+                    f"Model '{self.model}' not found. Pull it with: ollama pull {self.model}"
+                )
+            response.raise_for_status()
+            data = response.json()
+            return (data.get("response") or "").strip()
+        except httpx.ConnectError as e:
+            raise OllamaError(
+                f"Cannot connect to Ollama at {self.base_url}. Error: {str(e)}"
+            ) from e
+        except httpx.TimeoutException as e:
+            raise OllamaError(
+                f"Timeout connecting to Ollama at {self.base_url}. Error: {str(e)}"
+            ) from e
+        except httpx.HTTPStatusError as e:
+            raise OllamaError(
+                f"HTTP error from Ollama (status {e.response.status_code}): {str(e)}"
+            ) from e
+        except httpx.HTTPError as e:
+            raise OllamaError(
+                f"Network error connecting to Ollama at {self.base_url}: {type(e).__name__} - {str(e)}"
+            ) from e

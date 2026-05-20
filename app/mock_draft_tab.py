@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import streamlit as st
+from streamlit_autorefresh import st_autorefresh
 
-from draft.engine import MockDraftEngine
+from draft.engine import MockDraftEngine, _snake_team_index
 from draft.ffanalytics_loader import cache_is_fresh, load_active_players, load_player_cache
-from draft.models import ROSTER_SLOTS, RankingSource, ScoringFormat
+from draft.models import POSITION_COLORS, ROSTER_SLOTS, Position, RankingSource, ScoringFormat
 from draft.player_pool import refresh_players
 from draft.rpy2_setup import rpy2_session
 
@@ -29,11 +30,69 @@ def _ensure_player_pool(*, force_refresh: bool = False) -> list:
     return st.session_state["draft_pool"]
 
 
+def _position_colors(position: str) -> tuple[str, str]:
+    """Return (background, text) hex colors for a position."""
+    return POSITION_COLORS.get(position, ("#374151", "#FFFFFF"))
+
+
+def _truncate_name(name: str, max_len: int = 14) -> str:
+    return name if len(name) <= max_len else name[: max_len - 1] + "…"
+
+
+def _player_pick_html(
+    name: str,
+    position: str,
+    team: str = "",
+    *,
+    highlight: bool = False,
+) -> str:
+    """HTML for a Sleeper-style colored pick cell."""
+    bg, fg = _position_colors(position)
+    border = "2px solid #FBBF24" if highlight else "1px solid rgba(255,255,255,0.15)"
+    team_line = f'<div style="font-size:0.75em;opacity:0.9;">{position}'
+    if team:
+        team_line += f" · {team}"
+    team_line += "</div>"
+    return (
+        f'<div style="background:{bg};color:{fg};padding:6px 8px;border-radius:6px;'
+        f'border:{border};margin-bottom:4px;line-height:1.25;">'
+        f'<div style="font-weight:600;font-size:0.9em;">{_truncate_name(name)}</div>'
+        f"{team_line}</div>"
+    )
+
+
+def _on_clock_html(text: str, *, is_user: bool) -> str:
+    bg = "#F59E0B" if is_user else "#4B5563"
+    return (
+        f'<div style="background:{bg};color:#FFFFFF;padding:6px 8px;border-radius:6px;'
+        f'border:2px dashed #FBBF24;font-size:0.85em;font-weight:600;text-align:center;">'
+        f"{text}</div>"
+    )
+
+
+def _empty_cell_html(round_num: int) -> str:
+    return (
+        f'<div style="background:#1F2937;color:#6B7280;padding:6px 8px;border-radius:6px;'
+        f'font-size:0.75em;text-align:center;border:1px solid #374151;">R{round_num}</div>'
+    )
+
+
+def _render_position_legend() -> None:
+    chips = []
+    for pos in ("QB", "RB", "WR", "TE", "K", "DEF"):
+        bg, fg = _position_colors(pos)
+        chips.append(
+            f'<span style="background:{bg};color:{fg};padding:2px 8px;border-radius:4px;'
+            f'font-size:0.75em;font-weight:600;margin-right:6px;">{pos}</span>'
+        )
+    st.markdown("".join(chips), unsafe_allow_html=True)
+
+
 def _render_settings(
     pool_size: int,
-) -> tuple[ScoringFormat, int, int, int, float, RankingSource] | None:
+) -> tuple[ScoringFormat, int, int, int, float, RankingSource, str] | None:
     st.subheader("League settings")
-    col1, col2, col3, col4, col5 = st.columns(5)
+    col1, col2, col3, col4, col5, col6 = st.columns(6)
 
     with col1:
         scoring_label = st.selectbox(
@@ -72,6 +131,12 @@ def _render_settings(
             step=1,
             disabled=pool_size == 0,
         )
+    with col6:
+        user_team_name = st.text_input(
+            "Your team name",
+            value="My Team",
+            max_chars=25,
+        )
 
     cpu_randomness = st.slider(
         "Draft unpredictability",
@@ -86,36 +151,70 @@ def _render_settings(
     ranking_source = RankingSource(ranking_label)
     if pool_size:
         st.caption(f"{pool_size} players · up to {max_rounds} rounds")
-    return scoring, int(league_size), int(draft_slot), int(rounds), float(cpu_randomness), ranking_source
+    return scoring, int(league_size), int(draft_slot), int(rounds), float(cpu_randomness), ranking_source, user_team_name
 
 
-def _render_draft_board(draft: MockDraftEngine) -> None:
-    st.subheader("Draft board")
-    rows = []
+def _render_sleeper_draft_board(draft: MockDraftEngine) -> None:
+    """Render Sleeper-style grid board (teams as columns, rounds as rows)."""
+    st.subheader("Draft Board")
+    _render_position_legend()
+
+    num_teams = draft.settings.league_size
+    num_rounds = draft.settings.rounds
+    user_team_idx = draft.settings.draft_slot - 1
+
+    pick_grid: dict[tuple[int, int], tuple[str, str, str]] = {}
     for pick in draft.picks:
-        team_label = (
-            f"Team {pick.team_index + 1} (You)"
-            if pick.team_index == draft.settings.draft_slot - 1
-            else f"Team {pick.team_index + 1}"
+        pick_grid[(pick.round, pick.team_index)] = (
+            pick.player.name,
+            pick.player.position.value,
+            pick.player.team,
         )
-        rows.append(
-            {
-                "Overall": pick.overall,
-                "Round": pick.round,
-                "Pick": pick.pick_in_round,
-                "Team": team_label,
-                "Player": pick.player.name,
-                "Pos": pick.player.position.value,
-                "Team abbr": pick.player.team,
-                "FPG": round(
-                    pick.player.fantasy_points(draft.settings.scoring), 1
-                ),
-            }
-        )
-    if rows:
-        st.dataframe(rows, use_container_width=True, hide_index=True)
-    else:
-        st.caption("No picks yet.")
+
+    current_round = draft.current_round
+    current_team = draft.current_team_index if not draft.is_complete else -1
+
+    header_cols = st.columns(num_teams)
+    for i, col in enumerate(header_cols):
+        team_name = draft.get_team_name(i)
+        short_name = _truncate_name(team_name, 16)
+        if i == user_team_idx:
+            col.markdown(f"**{short_name}** 🏈")
+        else:
+            col.markdown(f"**{short_name}**")
+
+    for round_num in range(1, num_rounds + 1):
+        row_cols = st.columns(num_teams)
+
+        for pick_in_round in range(1, num_teams + 1):
+            team_idx = _snake_team_index(round_num, pick_in_round, num_teams)
+            col = row_cols[team_idx]
+
+            pick_data = pick_grid.get((round_num, team_idx))
+            is_current_pick = round_num == current_round and team_idx == current_team
+            is_user_team = team_idx == user_team_idx
+
+            if pick_data:
+                name, position, team = pick_data
+                html = _player_pick_html(
+                    name,
+                    position,
+                    team,
+                    highlight=is_user_team,
+                )
+                col.markdown(html, unsafe_allow_html=True)
+            elif is_current_pick:
+                remaining = draft.time_remaining()
+                if draft.is_user_turn:
+                    text = f"⏱️ YOUR PICK ({remaining}s)"
+                else:
+                    text = f"⏱️ On Clock ({remaining}s)"
+                col.markdown(
+                    _on_clock_html(text, is_user=draft.is_user_turn),
+                    unsafe_allow_html=True,
+                )
+            else:
+                col.markdown(_empty_cell_html(round_num), unsafe_allow_html=True)
 
 
 def _render_user_roster(draft: MockDraftEngine) -> None:
@@ -125,16 +224,24 @@ def _render_user_roster(draft: MockDraftEngine) -> None:
         st.caption("No players drafted yet.")
         return
 
-    rows = [
-        {
-            "Player": p.name,
-            "Pos": p.position.value,
-            "Team": p.team,
-            "FPG": round(p.fantasy_points(draft.settings.scoring), 1),
-        }
-        for p in roster.picks
-    ]
-    st.dataframe(rows, use_container_width=True, hide_index=True)
+    pos_order = {p: i for i, p in enumerate(Position)}
+    sorted_picks = sorted(roster.picks, key=lambda p: pos_order.get(p.position, 99))
+
+    for p in sorted_picks:
+        fpg = round(p.fantasy_points(draft.settings.scoring), 1)
+        bg, fg = _position_colors(p.position.value)
+        st.markdown(
+            f'<div style="display:flex;align-items:stretch;margin-bottom:6px;border-radius:6px;'
+            f'overflow:hidden;border:1px solid rgba(255,255,255,0.1);">'
+            f'<div style="background:{bg};color:{fg};padding:8px 10px;min-width:36px;'
+            f'font-weight:700;font-size:0.85em;display:flex;align-items:center;">'
+            f"{p.position.value}</div>"
+            f'<div style="flex:1;background:#1F2937;color:#F9FAFB;padding:8px 10px;">'
+            f'<div style="font-weight:600;">{p.name}</div>'
+            f'<div style="font-size:0.8em;color:#9CA3AF;">{p.team} · {fpg} FPG</div>'
+            f"</div></div>",
+            unsafe_allow_html=True,
+        )
 
     filled = []
     for slot, need in ROSTER_SLOTS.items():
@@ -146,6 +253,28 @@ def _render_user_roster(draft: MockDraftEngine) -> None:
     st.caption("Starters · " + " · ".join(filled))
 
 
+def _render_pick_timer(draft: MockDraftEngine) -> None:
+    """Render the countdown timer for the current pick."""
+    remaining = draft.time_remaining()
+    
+    if remaining <= 10:
+        st.error(f"⏱️ **{remaining}** seconds remaining!")
+    elif remaining <= 20:
+        st.warning(f"⏱️ **{remaining}** seconds remaining")
+    else:
+        st.info(f"⏱️ **{remaining}** seconds remaining")
+
+
+def _handle_timer_expiration(draft: MockDraftEngine) -> bool:
+    """Auto-draft for the team on the clock when their 30s expires. One pick per timeout."""
+    if draft.is_timer_expired() and not draft.is_complete:
+        draft.auto_pick()
+        if not draft.is_complete:
+            draft.start_pick_timer()
+        return True
+    return False
+
+
 def _render_pick_controls(draft: MockDraftEngine) -> None:
     if draft.is_complete:
         if draft.pool_exhausted and len(draft.picks) < draft.settings.league_size * draft.requested_rounds:
@@ -154,16 +283,22 @@ def _render_pick_controls(draft: MockDraftEngine) -> None:
                 f"(round {draft.picks[-1].round if draft.picks else 0})."
             )
         else:
-            st.success("Draft complete.")
+            st.success("Draft complete!")
         return
+
+    if _handle_timer_expiration(draft):
+        st.rerun()
 
     st.subheader("On the clock")
     round_num = draft.current_round
     overall = draft.current_overall
-    team_num = draft.current_team_index + 1
+    team_name = draft.get_team_name(draft.current_team_index)
+
+    _render_pick_timer(draft)
+    st.caption(f"Each team has **{draft.pick_time_limit}** seconds to pick.")
 
     if draft.is_user_turn:
-        st.info(f"Round {round_num} · Pick {overall} — **Your pick**")
+        st.info(f"Round {round_num} · Pick {overall} — **{team_name} (You)**")
         ranked = draft.rank_available()[:25]
         if not ranked:
             st.error("No players left in the pool.")
@@ -180,12 +315,19 @@ def _render_pick_controls(draft: MockDraftEngine) -> None:
         choice = st.selectbox("Select player", options=list(options.keys()))
         if st.button("Draft player", type="primary", use_container_width=True):
             draft.make_pick(options[choice])
-            draft.run_cpu_picks_until_user()
+            if not draft.is_complete:
+                draft.start_pick_timer()
             st.rerun()
     else:
-        st.warning(f"Round {round_num} · Pick {overall} — Team {team_num} is picking…")
-        if st.button("Simulate to your pick", use_container_width=True):
-            draft.run_cpu_picks_until_user()
+        st.warning(
+            f"Round {round_num} · Pick {overall} — **{team_name}** is on the clock "
+            f"({draft.time_remaining()}s left)"
+        )
+        if st.button("Skip to your pick", use_container_width=True):
+            while not draft.is_complete and not draft.is_user_turn:
+                draft.auto_pick()
+            if not draft.is_complete:
+                draft.start_pick_timer()
             st.rerun()
 
 
@@ -251,7 +393,7 @@ def render_mock_draft_tab() -> None:
     if settings is None:
         return
 
-    scoring, league_size, draft_slot, rounds, cpu_randomness, ranking_source = settings
+    scoring, league_size, draft_slot, rounds, cpu_randomness, ranking_source, user_team_name = settings
 
     slot_cols = st.columns([1, 1, 2])
     with slot_cols[0]:
@@ -270,6 +412,7 @@ def render_mock_draft_tab() -> None:
                     pool=pool,
                     cpu_randomness=cpu_randomness,
                     ranking_source=ranking_source,
+                    user_team_name=user_team_name,
                 )
                 st.rerun()
             except ValueError as exc:
@@ -283,6 +426,8 @@ def render_mock_draft_tab() -> None:
     if draft is None:
         return
 
+    st_autorefresh(interval=1000, key="draft_timer_refresh")
+
     meta = draft.settings
     st.caption(
         f"{meta.scoring.value} · {draft.ranking_source.value} rankings · "
@@ -291,13 +436,18 @@ def render_mock_draft_tab() -> None:
         f"#{min(draft.current_overall, draft.total_picks)} of {draft.total_picks}"
     )
 
-    board_col, roster_col = st.columns([3, 2])
-    with board_col:
-        _render_pick_controls(draft)
-        _render_draft_board(draft)
+    _render_pick_controls(draft)
+    
+    st.divider()
+    
+    _render_sleeper_draft_board(draft)
+    
+    st.divider()
+    
+    roster_col, best_col = st.columns([1, 1])
     with roster_col:
         _render_user_roster(draft)
-
+    with best_col:
         st.subheader("Best available")
         for player in draft.rank_available()[:8]:
             rank = player.rank_for_source(draft.ranking_source)

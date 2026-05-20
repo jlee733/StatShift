@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import math
 import random
+import time
 from dataclasses import dataclass, field
 
 from draft.models import (
     ROSTER_SLOTS,
+    TEAM_NAME_POOL,
     DraftPick,
     LeagueSettings,
     Player,
@@ -17,6 +19,30 @@ from draft.models import (
     TeamRoster,
 )
 from draft.player_pool import get_players, max_rounds_for_league
+
+
+def _generate_team_names(
+    league_size: int,
+    user_team_name: str = "My Team",
+    user_slot: int = 1,
+    rng: random.Random | None = None,
+) -> list[str]:
+    """Generate team names with user's name at their draft slot."""
+    rng = rng or random.Random()
+    cpu_names = rng.sample(TEAM_NAME_POOL, min(league_size - 1, len(TEAM_NAME_POOL)))
+    
+    names: list[str] = []
+    cpu_idx = 0
+    for i in range(league_size):
+        if i == user_slot - 1:
+            names.append(user_team_name)
+        else:
+            if cpu_idx < len(cpu_names):
+                names.append(cpu_names[cpu_idx])
+                cpu_idx += 1
+            else:
+                names.append(f"Team {i + 1}")
+    return names
 
 
 def _snake_team_index(round_num: int, pick_in_round: int, league_size: int) -> int:
@@ -38,6 +64,10 @@ class MockDraftEngine:
     cpu_top_k: int = 12
     seed: int | None = None
     ranking_source: RankingSource = RankingSource.YAHOO
+    team_names: list[str] = field(default_factory=list)
+    user_team_name: str = "My Team"
+    pick_time_limit: int = 30
+    pick_start_time: float | None = None
     _rng: random.Random = field(
         init=False, repr=False, compare=False, default_factory=random.Random
     )
@@ -52,6 +82,13 @@ class MockDraftEngine:
             reverse=True,
         )
         self._rng = random.Random(self.seed)
+        if not self.team_names:
+            self.team_names = _generate_team_names(
+                self.settings.league_size,
+                self.user_team_name,
+                self.settings.draft_slot,
+                self._rng,
+            )
 
     @property
     def total_picks(self) -> int:
@@ -91,6 +128,27 @@ class MockDraftEngine:
             not self.is_complete
             and self.current_team_index == self.settings.draft_slot - 1
         )
+
+    def start_pick_timer(self) -> None:
+        """Start or reset the pick timer for the current pick."""
+        self.pick_start_time = time.time()
+
+    def time_remaining(self) -> int:
+        """Return seconds remaining on the pick clock."""
+        if self.pick_start_time is None:
+            return self.pick_time_limit
+        elapsed = time.time() - self.pick_start_time
+        return max(0, self.pick_time_limit - int(elapsed))
+
+    def is_timer_expired(self) -> bool:
+        """Check if the pick timer has expired."""
+        return self.pick_start_time is not None and self.time_remaining() <= 0
+
+    def get_team_name(self, team_index: int) -> str:
+        """Get the display name for a team."""
+        if 0 <= team_index < len(self.team_names):
+            return self.team_names[team_index]
+        return f"Team {team_index + 1}"
 
     def drafted_names(self) -> set[str]:
         return {pick.player.name for pick in self.picks}
@@ -201,6 +259,9 @@ class MockDraftEngine:
             cpu_randomness=self.cpu_randomness,
             cpu_top_k=self.cpu_top_k,
             ranking_source=self.ranking_source,
+            team_names=self.team_names,
+            user_team_name=self.user_team_name,
+            pick_time_limit=self.pick_time_limit,
         )
         clone.picks = list(self.picks)
         clone.rosters = [
@@ -253,6 +314,8 @@ class MockDraftEngine:
         cpu_top_k: int = 12,
         seed: int | None = None,
         ranking_source: RankingSource = RankingSource.YAHOO,
+        user_team_name: str = "My Team",
+        pick_time_limit: int = 30,
     ) -> MockDraftEngine:
         player_pool = pool if pool is not None else get_players()
         if not player_pool:
@@ -274,7 +337,10 @@ class MockDraftEngine:
             cpu_top_k=cpu_top_k,
             seed=seed,
             ranking_source=ranking_source,
+            user_team_name=user_team_name,
+            pick_time_limit=pick_time_limit,
         )
         engine.requested_rounds = rounds
         engine.max_supported_rounds = supported
+        engine.start_pick_timer()
         return engine
