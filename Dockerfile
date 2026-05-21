@@ -41,6 +41,7 @@ COPY draft/ draft/
 COPY ui/ ui/
 COPY scripts/ scripts/
 
-RUN chmod +x scripts/docker-entrypoint-api.sh scripts/docker-entrypoint-ui.sh
+RUN chmod +x scripts/docker-entrypoint-api.sh scripts/docker-entrypoint-ui.sh \
+    scripts/docker-entrypoint-espn-scrape.sh
 
 EXPOSE 8000 8501

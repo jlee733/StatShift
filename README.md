@@ -116,52 +116,47 @@ After rebuilding the image (`docker compose up --build`), run a sync again if ff
 
 Active NFL players (injuries + recent game logs) can be scraped from ESPN and loaded into the same SQLite file the API uses (`data/statshift.db`).
 
+### Prefect server + scrape (recommended)
+
+Run a **local Prefect server** (UI at http://127.0.0.1:4200), then run the scrape against it. Scripts use **`caffeinate`** on macOS so the Mac stays awake during the job (plug in AC power).
+
 ```bash
-# One-off: scrape a–z, merge JSON, load SQLite (can take tens of minutes)
-docker compose --profile sync run --rm espn-active-sync
+chmod +x scripts/start_prefect_server.sh scripts/run_espn_scrape_prefect.sh scripts/run_espn_scrape_background.sh
 
-# Or locally (after init_db.py)
-python -m jobs.scrape_active_players
+# Start Prefect (Docker, detached)
+./scripts/start_prefect_server.sh
 
-# Reload DB from an existing merged JSON cache only
+# Run scrape in foreground (prevents sleep on macOS)
+./scripts/run_espn_scrape_prefect.sh
+
+# Or background + log (starts Prefect if needed)
+./scripts/run_espn_scrape_background.sh
+```
+
+**Docker:**
+
+```bash
+docker compose --profile prefect up -d prefect-server
+docker compose --profile prefect --profile sync run --rm espn-active-sync
+```
+
+Flows use `PREFECT_API_URL=http://127.0.0.1:4200/api` (stable UI/API, not a random ephemeral port). Telemetry is disabled via `PREFECT_SERVER_ANALYTICS_ENABLED=false`.
+
+### Without Prefect
+
+```bash
+python -m jobs.scrape_active_players_sync
+```
+
+### Reload DB only
+
+```bash
 python scripts/load_players_to_db.py
 ```
 
 `GET /health` reports `player_count` and `last_scrape_at` after a load.
 
-### Long runs and sleep (laptop / desktop)
-
-**Closing the terminal is fine** (`nohup`, `tmux`, or `./scripts/run_espn_scrape_background.sh`). **System sleep is not** — when your Mac or PC sleeps, Python and Docker pause until wake.
-
-| Approach | Survives closing terminal? | Survives computer sleep? |
-|----------|----------------------------|---------------------------|
-| Foreground `python -m jobs.scrape_active_players` | No | No |
-| `nohup` / background script | Yes | No |
-| `tmux` / `screen` | Yes | No |
-| macOS `caffeinate` (used by background script) | Yes | Yes *while awake and job running* |
-| **Remote Linux VM / VPS / home server** | Yes | **Yes** (host stays up) |
-
-**Recommended for overnight scrapes**
-
-1. **Best:** SSH into an always-on machine (cloud VM, Raspberry Pi, old desktop) and run:
-   ```bash
-   cd StatShift && python -m jobs.scrape_active_players
-   ```
-   Copy `data/` back when done, or mount the same volume if you run Docker there.
-
-2. **On a Mac you keep plugged in:** prevent sleep and run detached:
-   ```bash
-   chmod +x scripts/run_espn_scrape_background.sh
-   ./scripts/run_espn_scrape_background.sh
-   tail -f data/logs/espn_scrape_*.log
-   ```
-   Or manually: `caffeinate -dims python -m jobs.scrape_active_players`
-
-3. **System Settings:** disable sleep on AC power while the job runs (Energy Saver / Battery).
-
-With `ESPN_API_DELAY_SECONDS=30`, a full scrape can take **many hours**. Per-letter caches under `data/espn_active_by_letter/` are written as each letter finishes; if a run stops mid-way, you can merge partial caches later with `python scripts/load_players_to_db.py` only after fixing/completing letter files, or re-run (the flow re-scrapes all letters).
-
-**Docker on a sleeping laptop:** Docker Desktop pauses with the host — use a remote host for Docker scrapes too, not only local Python.
+With `ESPN_API_DELAY_SECONDS=30`, a full scrape can take **many hours**. Per-letter JSON is written under `data/espn_active_by_letter/` as each letter completes.
 
 ## Tests
 
@@ -180,6 +175,8 @@ OLLAMA_MODEL=gemma2:2b
 OLLAMA_BASE_URL=http://127.0.0.1:11434
 API_BASE_URL=http://127.0.0.1:8000
 ESPN_API_DELAY_SECONDS=30
+PREFECT_API_URL=http://127.0.0.1:4200/api
+PREFECT_SERVER_ANALYTICS_ENABLED=false
 ```
 
 ## API (read-only)
