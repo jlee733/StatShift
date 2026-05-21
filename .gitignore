@@ -9,5 +9,6 @@ data/espn_active_by_letter/
 data/espn_active_players_full.json
 data/ffanalytics_players.json
 data/sleeper_players.json
+data/logs/
 .DS_Store
 .streamlit/secrets.toml

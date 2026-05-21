@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     ollama_model: str = "gemma2:2b"
     api_host: str = "127.0.0.1"
     api_port: int = 8000
+    espn_api_delay_seconds: float = 30.0
 
 
 settings = Settings()

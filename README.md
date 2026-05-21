@@ -129,6 +129,40 @@ python scripts/load_players_to_db.py
 
 `GET /health` reports `player_count` and `last_scrape_at` after a load.
 
+### Long runs and sleep (laptop / desktop)
+
+**Closing the terminal is fine** (`nohup`, `tmux`, or `./scripts/run_espn_scrape_background.sh`). **System sleep is not** — when your Mac or PC sleeps, Python and Docker pause until wake.
+
+| Approach | Survives closing terminal? | Survives computer sleep? |
+|----------|----------------------------|---------------------------|
+| Foreground `python -m jobs.scrape_active_players` | No | No |
+| `nohup` / background script | Yes | No |
+| `tmux` / `screen` | Yes | No |
+| macOS `caffeinate` (used by background script) | Yes | Yes *while awake and job running* |
+| **Remote Linux VM / VPS / home server** | Yes | **Yes** (host stays up) |
+
+**Recommended for overnight scrapes**
+
+1. **Best:** SSH into an always-on machine (cloud VM, Raspberry Pi, old desktop) and run:
+   ```bash
+   cd StatShift && python -m jobs.scrape_active_players
+   ```
+   Copy `data/` back when done, or mount the same volume if you run Docker there.
+
+2. **On a Mac you keep plugged in:** prevent sleep and run detached:
+   ```bash
+   chmod +x scripts/run_espn_scrape_background.sh
+   ./scripts/run_espn_scrape_background.sh
+   tail -f data/logs/espn_scrape_*.log
+   ```
+   Or manually: `caffeinate -dims python -m jobs.scrape_active_players`
+
+3. **System Settings:** disable sleep on AC power while the job runs (Energy Saver / Battery).
+
+With `ESPN_API_DELAY_SECONDS=30`, a full scrape can take **many hours**. Per-letter caches under `data/espn_active_by_letter/` are written as each letter finishes; if a run stops mid-way, you can merge partial caches later with `python scripts/load_players_to_db.py` only after fixing/completing letter files, or re-run (the flow re-scrapes all letters).
+
+**Docker on a sleeping laptop:** Docker Desktop pauses with the host — use a remote host for Docker scrapes too, not only local Python.
+
 ## Tests
 
 ```bash
@@ -145,6 +179,7 @@ Optional `.env` overrides:
 OLLAMA_MODEL=gemma2:2b
 OLLAMA_BASE_URL=http://127.0.0.1:11434
 API_BASE_URL=http://127.0.0.1:8000
+ESPN_API_DELAY_SECONDS=30
 ```
 
 ## API (read-only)

@@ -13,6 +13,7 @@ import httpx
 
 from config import settings
 from espn.client import ESPNEndpoint
+from espn.rate_limit import wait_before_espn_request
 from espn.player import (
     gamelog_to_dict,
     get_player_gamelog,
@@ -89,6 +90,7 @@ def resolve_athlete_summary(
 ) -> dict[str, Any] | None:
     """Resolve an athlete ref to core summary fields."""
     try:
+        wait_before_espn_request()
         response = http.get(ref)
         response.raise_for_status()
         payload = response.json()

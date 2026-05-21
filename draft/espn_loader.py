@@ -12,6 +12,7 @@ import httpx
 
 from config import settings
 from draft.models import Player, Position
+from espn.rate_limit import wait_before_espn_request
 from espn.scrape import list_active_athlete_refs
 
 FANTASY_ABBREV: dict[str, Position] = {
@@ -97,6 +98,7 @@ def _resolve_athlete(
     team_map: dict[str, str],
     http: httpx.Client,
 ) -> Player | None:
+    wait_before_espn_request()
     response = http.get(ref)
     response.raise_for_status()
     return parse_athlete_payload(response.json(), team_map)

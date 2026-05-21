@@ -8,6 +8,8 @@ from typing import Any
 
 import httpx
 
+from espn.rate_limit import wait_before_espn_request
+
 CORE_API_BASE = "https://sports.core.api.espn.com/v2/sports/football/leagues/nfl"
 CFB_API_BASE = "https://sports.core.api.espn.com/v2/sports/football/leagues/college-football"
 SITE_API_BASE = "https://site.api.espn.com/apis/site/v2/sports/football/nfl"
@@ -118,6 +120,7 @@ def gamelog_to_dict(entry: GameLogEntry) -> dict[str, Any]:
 
 def _get_json(url: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
     """Make a GET request and return JSON response."""
+    wait_before_espn_request()
     with httpx.Client(timeout=TIMEOUT, follow_redirects=True) as client:
         response = client.get(url, params=params)
         response.raise_for_status()

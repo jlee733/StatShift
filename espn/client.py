@@ -9,6 +9,8 @@ from typing import Any, Iterator
 
 import httpx
 
+from espn.rate_limit import wait_before_espn_request
+
 
 class ESPNClient:
     """Shared ESPN API settings (no HTTP session)."""
@@ -78,6 +80,7 @@ class ESPNEndpoint(ESPNClient):
         url: str | None = None,
         params: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        wait_before_espn_request()
         response = self.client.get(url or self._endpoint_url(), params=params)
         response.raise_for_status()
         return response.json()
