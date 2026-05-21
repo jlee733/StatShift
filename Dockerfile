@@ -32,11 +32,13 @@ COPY requirements.txt .
 RUN pip install -r requirements.txt
 
 COPY config.py .
+COPY db/ db/
 COPY api/ api/
+COPY espn/ espn/
+COPY jobs/ jobs/
 COPY rag/ rag/
 COPY draft/ draft/
-COPY sdks/ sdks/
-COPY app/ app/
+COPY ui/ ui/
 COPY scripts/ scripts/
 
 RUN chmod +x scripts/docker-entrypoint-api.sh scripts/docker-entrypoint-ui.sh

@@ -8,10 +8,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 import streamlit as st
 
-from sdks.distribution_fit import fit_best_distribution, format_params_string
-from sdks.espn_player_loader import (
+from espn.distributions import fit_best_distribution, format_params_string
+from espn.player import (
     CollegeSeasonStats,
-    CombineMetrics,
     GameLogEntry,
     InjuryInfo,
     NewsArticle,
@@ -20,7 +19,6 @@ from sdks.espn_player_loader import (
     calculate_fantasy_points,
     get_available_seasons,
     get_player_college_stats,
-    get_player_combine,
     get_player_gamelog,
     get_player_injuries,
     get_player_news,
@@ -325,43 +323,6 @@ def _render_stats_tab(player_id: str) -> None:
         st.divider()
 
 
-def _render_combine_tab(player_id: str) -> None:
-    """Render the combine metrics sub-tab."""
-    with st.spinner("Loading combine data..."):
-        combine = get_player_combine(player_id)
-    
-    if not combine:
-        st.info("No combine data available for this player.")
-        return
-    
-    if combine.year:
-        st.caption(f"NFL Combine {combine.year}")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.metric("40-Yard Dash", f"{combine.forty_yard}s" if combine.forty_yard else "—")
-        st.metric("Bench Press", f"{combine.bench_press} reps" if combine.bench_press else "—")
-        st.metric("3-Cone Drill", f"{combine.three_cone}s" if combine.three_cone else "—")
-    
-    with col2:
-        st.metric("Vertical Jump", f'{combine.vertical_jump}"' if combine.vertical_jump else "—")
-        st.metric("Broad Jump", f'{combine.broad_jump}"' if combine.broad_jump else "—")
-        st.metric("20-Yard Shuttle", f"{combine.shuttle}s" if combine.shuttle else "—")
-    
-    all_none = all([
-        combine.forty_yard is None,
-        combine.vertical_jump is None,
-        combine.bench_press is None,
-        combine.broad_jump is None,
-        combine.three_cone is None,
-        combine.shuttle is None,
-    ])
-    
-    if all_none:
-        st.info("Combine metrics not available. Player may not have participated in the NFL Combine or data is not publicly available.")
-
-
 def _render_injuries_tab(player_id: str) -> None:
     """Render the injuries sub-tab."""
     with st.spinner("Loading injury data..."):
@@ -422,7 +383,7 @@ def _render_news_tab(player_id: str) -> None:
         st.divider()
 
 
-def render_research_tab() -> None:
+def render_research_page() -> None:
     """Main entry point for the Research tab."""
     _init_research_state()
     
@@ -450,18 +411,19 @@ def render_research_tab() -> None:
     
     st.divider()
     
-    stats_tab, combine_tab, injuries_tab, news_tab = st.tabs([
-        "Stats", "Combine", "Injuries", "News"
+    stats_tab, injuries_tab, news_tab = st.tabs([
+        "Stats", "Injuries", "News"
     ])
     
     with stats_tab:
         _render_stats_tab(player_id)
-    
-    with combine_tab:
-        _render_combine_tab(player_id)
     
     with injuries_tab:
         _render_injuries_tab(player_id)
     
     with news_tab:
         _render_news_tab(player_id)
+
+
+st.title("StatShift")
+render_research_page()

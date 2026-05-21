@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,7 +12,7 @@ import httpx
 
 from config import settings
 from draft.models import Player, Position
-from sdks.espnSDK import ESPNEndpoint
+from espn.scrape import list_active_athlete_refs
 
 FANTASY_ABBREV: dict[str, Position] = {
     "QB": Position.QB,
@@ -35,17 +34,11 @@ POSITION_BASE_FP: dict[Position, float] = {
 
 CACHE_PATH = settings.project_root / "data" / "espn_active_players.json"
 CACHE_MAX_AGE_HOURS = 24
-_LIST_PAGE_SIZE = 1000
 _RESOLVE_WORKERS = 32
 
 
 def _cache_path(path: Path | None = None) -> Path:
     return path or CACHE_PATH
-
-
-def _team_id_from_ref(ref: str) -> str | None:
-    match = re.search(r"/teams/(\d+)", ref)
-    return match.group(1) if match else None
 
 
 def _estimate_fantasy_points(position: Position, experience_years: int) -> tuple[float, float, float]:
@@ -63,6 +56,8 @@ def parse_athlete_payload(
     payload: dict[str, Any],
     team_abbreviations: dict[str, str],
 ) -> Player | None:
+    from espn.scrape import team_id_from_ref
+
     pos_data = payload.get("position") or {}
     abbrev = (pos_data.get("abbreviation") or "").upper()
     position = FANTASY_ABBREV.get(abbrev)
@@ -80,12 +75,11 @@ def parse_athlete_payload(
     team_ref = payload.get("team") or {}
     if isinstance(team_ref, dict):
         ref = team_ref.get("$ref", "")
-        team_id = team_ref.get("id") or _team_id_from_ref(ref)
+        team_id = team_ref.get("id") or team_id_from_ref(ref)
         if team_id:
             team = team_abbreviations.get(str(team_id), "")
 
     fp_ppr, fp_half, fp_std = _estimate_fantasy_points(position, years)
-    espn_id = str(payload.get("id") or "")
 
     return Player(
         name=name,
@@ -96,28 +90,6 @@ def parse_athlete_payload(
         team=team,
         adp=999.0,
     )
-
-
-def _load_team_abbreviations(http: httpx.Client, timeout: float) -> dict[str, str]:
-    teams_api = ESPNEndpoint("teams", client=http, timeout=timeout)
-    mapping: dict[str, str] = {}
-    for item in teams_api.iter_items(limit=50):
-        payload = teams_api.resolve_ref(item)
-        team_id = str(payload.get("id", ""))
-        abbrev = payload.get("abbreviation") or payload.get("shortDisplayName") or ""
-        if team_id and abbrev:
-            mapping[team_id] = abbrev
-    return mapping
-
-
-def _collect_athlete_refs(api: ESPNEndpoint) -> list[str]:
-    refs: list[str] = []
-    for page in api.iter_pages(limit=_LIST_PAGE_SIZE, params={"active": "true"}):
-        for item in page.get("items", []):
-            ref = item.get("$ref")
-            if ref:
-                refs.append(ref)
-    return refs
 
 
 def _resolve_athlete(
@@ -136,14 +108,13 @@ def fetch_active_players(
     max_workers: int = _RESOLVE_WORKERS,
 ) -> list[Player]:
     """Fetch all active NFL players draftable in fantasy (QB/RB/WR/TE/K)."""
-    with ESPNEndpoint("athletes", timeout=timeout) as api:
-        team_map = _load_team_abbreviations(api.client, timeout)
-        refs = _collect_athlete_refs(api)
+    refs, team_map = list_active_athlete_refs(timeout=timeout)
 
+    with httpx.Client(timeout=timeout, follow_redirects=True) as http:
         players: list[Player] = []
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {
-                executor.submit(_resolve_athlete, ref, team_map, api.client): ref
+                executor.submit(_resolve_athlete, ref, team_map, http): ref
                 for ref in refs
             }
             for future in as_completed(futures):

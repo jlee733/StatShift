@@ -332,7 +332,7 @@ def _render_pick_controls(draft: MockDraftEngine) -> None:
             st.rerun()
 
 
-def render_mock_draft_tab() -> None:
+def render_mock_draft_page() -> None:
     _init_draft_state()
 
     # Auto-load players if cache is missing or stale and not already attempted
@@ -495,3 +495,7 @@ def _render_monte_carlo_lookahead(draft: MockDraftEngine) -> None:
 
     st.subheader("Likely available next pick")
     st.dataframe(rows, use_container_width=True, hide_index=True)
+
+
+st.title("StatShift")
+render_mock_draft_page()

@@ -5,7 +5,7 @@ from __future__ import annotations
 import unittest
 from datetime import datetime
 
-from sdks.espn_player_loader import (
+from espn.player import (
     _college_season_from_categories,
     is_upcoming_rookie,
     nfl_season_has_started,

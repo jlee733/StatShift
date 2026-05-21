@@ -11,8 +11,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from app.ui_styles import inject_global_styles
 from draft.rpy2_setup import init_rpy2_on_main_thread
+from ui.styles import inject_global_styles
 
 st.set_page_config(
     page_title="StatShift",
@@ -31,21 +31,21 @@ def _rpy2_ready() -> bool:
 _rpy2_ready()
 inject_global_styles()
 
-VIEWS_DIR = Path(__file__).parent / "views"
+PAGES_DIR = Path(__file__).parent / "pages"
 
 home_page = st.Page(
-    str(VIEWS_DIR / "home_page.py"),
+    str(PAGES_DIR / "mock_draft.py"),
     title="Home",
     icon="🏠",
     default=True,
 )
 ask_page = st.Page(
-    str(VIEWS_DIR / "ask_page.py"),
+    str(PAGES_DIR / "ask.py"),
     title="Ask",
     icon="💬",
 )
 research_page = st.Page(
-    str(VIEWS_DIR / "research_page.py"),
+    str(PAGES_DIR / "research.py"),
     title="Research",
     icon="🔍",
 )

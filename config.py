@@ -12,6 +12,8 @@ class Settings(BaseSettings):
 
     project_root: Path = Path(__file__).resolve().parent
     db_path: Path = project_root / "data" / "statshift.db"
+    espn_letter_cache_dir: Path = project_root / "data" / "espn_active_by_letter"
+    espn_active_players_full_path: Path = project_root / "data" / "espn_active_players_full.json"
     api_base_url: str = "http://127.0.0.1:8000"
     ollama_base_url: str = "http://127.0.0.1:11434"
     ollama_model: str = "gemma2:2b"

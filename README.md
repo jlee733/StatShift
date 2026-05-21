@@ -7,6 +7,19 @@ Local fantasy football statistics assistant. Query seeded NFL/fantasy data throu
 
 Factual questions (stats, matchups, injuries) are answered from the database. Conversational prompts go to Gemma.
 
+## Project layout
+
+| Package | Role |
+|---------|------|
+| `ui/` | Streamlit app (`ui/app.py`) and pages |
+| `api/` | FastAPI read-only HTTP service |
+| `db/` | SQLite schema, read access, scrape loaders |
+| `espn/` | ESPN client, player research, bulk scrape |
+| `jobs/` | Prefect ingestion flows |
+| `draft/` | Mock draft engine and player pools |
+| `rag/` | Intent routing and Ollama Q&A |
+| `scripts/` | DB init and sync CLIs |
+
 ## Prerequisites
 
 - **Docker (recommended):** Docker Desktop or Docker Engine with Compose v2
@@ -61,7 +74,7 @@ python scripts/init_db.py
 uvicorn api.main:app --reload
 
 # 2 — UI
-streamlit run app/streamlit_app.py
+streamlit run ui/app.py
 
 # 3 — Ollama (if not already running)
 ollama serve
@@ -99,6 +112,23 @@ docker compose exec ui python scripts/sync_ffanalytics_players.py
 
 After rebuilding the image (`docker compose up --build`), run a sync again if ffanalytics or R packages changed.
 
+## ESPN player scrape → SQLite
+
+Active NFL players (injuries + recent game logs) can be scraped from ESPN and loaded into the same SQLite file the API uses (`data/statshift.db`).
+
+```bash
+# One-off: scrape a–z, merge JSON, load SQLite (can take tens of minutes)
+docker compose --profile sync run --rm espn-active-sync
+
+# Or locally (after init_db.py)
+python -m jobs.scrape_active_players
+
+# Reload DB from an existing merged JSON cache only
+python scripts/load_players_to_db.py
+```
+
+`GET /health` reports `player_count` and `last_scrape_at` after a load.
+
 ## Tests
 
 ```bash
@@ -121,11 +151,14 @@ API_BASE_URL=http://127.0.0.1:8000
 
 | Endpoint | Description |
 |----------|-------------|
-| `GET /health` | Service + DB check |
+| `GET /health` | Service + DB check (`player_count`, `last_scrape_at`) |
 | `GET /documents` | List documents |
 | `GET /documents/{id}` | Single document |
 | `GET /search?q=...` | FTS search for RAG |
 | `GET /categories` | Distinct categories |
+| `GET /players` | List scraped players (`letter`, `limit`, `offset`) |
+| `GET /players/search?q=...` | Search players by name |
+| `GET /players/{espn_id}` | Player profile, injuries, game logs |
 
 `POST`, `PUT`, `PATCH`, and `DELETE` return **405** — writes are blocked at the API layer; SQLite is opened in read-only mode for queries.
 

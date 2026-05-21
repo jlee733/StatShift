@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from typing import Any
 
@@ -73,17 +73,6 @@ class SeasonStats:
 
 
 @dataclass
-class CombineMetrics:
-    year: int | None
-    forty_yard: float | None
-    vertical_jump: float | None
-    bench_press: int | None
-    broad_jump: float | None
-    three_cone: float | None
-    shuttle: float | None
-
-
-@dataclass
 class InjuryInfo:
     status: str
     injury_type: str
@@ -115,6 +104,16 @@ class GameLogEntry:
     receiving_yards: int
     receiving_tds: int
     fumbles_lost: int
+
+
+def injury_to_dict(injury: InjuryInfo) -> dict[str, Any]:
+    """Serialize injury info for JSON caches."""
+    return asdict(injury)
+
+
+def gamelog_to_dict(entry: GameLogEntry) -> dict[str, Any]:
+    """Serialize a game log entry for JSON caches."""
+    return asdict(entry)
 
 
 def _get_json(url: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -445,41 +444,6 @@ def get_player_stats(player_id: str, season: int | None = None) -> list[SeasonSt
     ))
     
     return results
-
-
-def get_player_combine(player_id: str) -> CombineMetrics | None:
-    """Get NFL Combine metrics for a player."""
-    profile = get_player_profile(player_id)
-    if not profile:
-        return None
-    
-    url = f"{CORE_API_BASE}/athletes/{player_id}"
-    
-    try:
-        data = _get_json(url)
-    except httpx.HTTPError:
-        return CombineMetrics(
-            year=None,
-            forty_yard=None,
-            vertical_jump=None,
-            bench_press=None,
-            broad_jump=None,
-            three_cone=None,
-            shuttle=None,
-        )
-    
-    draft = data.get("draft", {})
-    combine_year = draft.get("year") if draft else None
-    
-    return CombineMetrics(
-        year=combine_year,
-        forty_yard=None,
-        vertical_jump=None,
-        bench_press=None,
-        broad_jump=None,
-        three_cone=None,
-        shuttle=None,
-    )
 
 
 def get_player_injuries(player_id: str) -> list[InjuryInfo]:

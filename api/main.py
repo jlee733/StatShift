@@ -8,7 +8,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from api.db import db
+from db.read import db
 from config import settings
 
 app = FastAPI(
@@ -33,6 +33,28 @@ class HealthResponse(BaseModel):
     status: str
     db_path: str
     read_only: bool = True
+    player_count: int = 0
+    last_scrape_at: str | None = None
+
+
+class PlayerSummary(BaseModel):
+    espn_id: str
+    first_name: str
+    last_name: str
+    display_name: str
+    last_name_initial: str
+    position: str | None = None
+    team: str | None = None
+    experience: int = 0
+    draft_year: int | None = None
+    status: str | None = None
+    updated_at: str
+
+
+class PlayerDetail(PlayerSummary):
+    injuries: list[dict[str, Any]] = []
+    seasons: list[int] = []
+    game_logs: dict[str, list[dict[str, Any]]] = {}
 
 
 @app.middleware("http")
@@ -57,7 +79,13 @@ def health() -> HealthResponse:
             status_code=503,
             detail=f"Database not found at {settings.db_path}. Run: python scripts/init_db.py",
         )
-    return HealthResponse(status="ok", db_path=str(settings.db_path))
+    scrape = db.latest_scrape_run()
+    return HealthResponse(
+        status="ok",
+        db_path=str(settings.db_path),
+        player_count=db.count_players(),
+        last_scrape_at=scrape["completed_at"] if scrape else None,
+    )
 
 
 @app.get("/documents", response_model=list[DocumentSummary])
@@ -88,3 +116,39 @@ def search_documents(
 @app.get("/categories")
 def list_categories() -> dict[str, list[str]]:
     return {"categories": db.list_categories()}
+
+
+@app.get("/players", response_model=list[PlayerSummary])
+def list_players(
+    letter: str | None = Query(
+        None,
+        min_length=1,
+        max_length=1,
+        description="Filter by last name initial (a-z)",
+    ),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+) -> list[dict[str, Any]]:
+    if letter and not letter.isalpha():
+        raise HTTPException(status_code=400, detail="letter must be a-z")
+    return db.list_players(
+        letter=letter.lower() if letter else None,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@app.get("/players/search", response_model=list[PlayerSummary])
+def search_players(
+    q: str = Query(..., min_length=1, description="Search by player name"),
+    limit: int = Query(20, ge=1, le=100),
+) -> list[dict[str, Any]]:
+    return db.search_players(q, limit=limit)
+
+
+@app.get("/players/{espn_id}", response_model=PlayerDetail)
+def get_player(espn_id: str) -> dict[str, Any]:
+    player = db.get_player(espn_id)
+    if not player:
+        raise HTTPException(status_code=404, detail="Player not found")
+    return player

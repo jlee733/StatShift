@@ -9,3 +9,4 @@ rpy2>=3.5.0
 scipy>=1.11.0
 matplotlib>=3.8.0
 numpy>=1.26.0
+prefect>=3.0.0

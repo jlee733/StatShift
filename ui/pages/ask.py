@@ -9,7 +9,6 @@ from rag.ollama_client import OllamaClient, OllamaError
 
 st.title("StatShift")
 
-# Model selection
 model_options = {
     "Gemma 2": "gemma2:latest",
     "Llama 3": "llama3:latest",

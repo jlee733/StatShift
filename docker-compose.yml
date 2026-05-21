@@ -72,6 +72,15 @@ services:
     entrypoint: ["python", "scripts/sync_ffanalytics_players.py"]
     restart: "no"
 
+  # Optional: scrape active NFL players (ESPN) by last-name letter a-z; can take tens of minutes
+  espn-active-sync:
+    profiles: [sync]
+    build: .
+    volumes:
+      - statshift_data:/app/data
+    entrypoint: ["python", "-m", "jobs.scrape_active_players"]
+    restart: "no"
+
 volumes:
   statshift_data:
   ollama_data:
