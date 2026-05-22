@@ -2,10 +2,19 @@
 
 from __future__ import annotations
 
+import json
+import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from espn.player import GameLogEntry, InjuryInfo, gamelog_to_dict, injury_to_dict
-from espn.scrape import last_name_initial
+from espn.scrape import (
+    active_athlete_refs_cache_is_fresh,
+    last_name_initial,
+    load_active_athlete_refs_cache,
+    save_active_athlete_refs_cache,
+)
 
 
 class LastNameInitialTests(unittest.TestCase):
@@ -55,6 +64,54 @@ class SerializationTests(unittest.TestCase):
         data = gamelog_to_dict(entry)
         self.assertEqual(data["week"], 1)
         self.assertEqual(data["passing_yards"], 250)
+
+
+class ActiveAthleteRefsCacheTests(unittest.TestCase):
+    def test_save_load_roundtrip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "refs.json"
+            refs = ["https://example.com/athlete/1"]
+            team_map = {"1": "KC"}
+            save_active_athlete_refs_cache(refs, team_map, path)
+            loaded = load_active_athlete_refs_cache(path)
+            self.assertIsNotNone(loaded)
+            assert loaded is not None
+            self.assertEqual(loaded[0], refs)
+            self.assertEqual(loaded[1], team_map)
+
+    def test_freshness_within_ttl(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "refs.json"
+            fetched_at = datetime.now(timezone.utc).isoformat()
+            path.write_text(
+                json.dumps(
+                    {
+                        "fetched_at": fetched_at,
+                        "ref_count": 1,
+                        "refs": ["https://example.com/athlete/1"],
+                        "team_map": {"1": "KC"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            self.assertTrue(active_athlete_refs_cache_is_fresh(path, max_age_hours=24))
+
+    def test_stale_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "refs.json"
+            fetched_at = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
+            path.write_text(
+                json.dumps(
+                    {
+                        "fetched_at": fetched_at,
+                        "ref_count": 1,
+                        "refs": ["https://example.com/athlete/1"],
+                        "team_map": {"1": "KC"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            self.assertFalse(active_athlete_refs_cache_is_fresh(path, max_age_hours=24))
 
 
 class LetterFilterTests(unittest.TestCase):

@@ -36,6 +36,10 @@ def merged_cache_path() -> Path:
     return settings.espn_active_players_full_path
 
 
+def active_athlete_refs_cache_path() -> Path:
+    return settings.espn_active_athlete_refs_cache_path
+
+
 def team_id_from_ref(ref: str) -> str | None:
     match = re.search(r"/teams/(\d+)", ref)
     return match.group(1) if match else None
@@ -67,11 +71,11 @@ def load_team_abbreviations(
     return mapping
 
 
-def list_active_athlete_refs(
+def fetch_active_athlete_refs_from_api(
     *,
     timeout: float = DEFAULT_TIMEOUT,
 ) -> tuple[list[str], dict[str, str]]:
-    """Return all active athlete $ref URLs and team abbreviation map."""
+    """Fetch all active athlete $ref URLs and team abbreviation map from ESPN."""
     with ESPNEndpoint("athletes", timeout=timeout) as api:
         team_map = load_team_abbreviations(api.client, timeout=timeout)
         refs: list[str] = []
@@ -81,6 +85,103 @@ def list_active_athlete_refs(
                 if ref:
                     refs.append(ref)
         return refs, team_map
+
+
+def save_active_athlete_refs_cache(
+    refs: list[str],
+    team_map: dict[str, str],
+    path: Path | None = None,
+) -> Path:
+    """Persist athlete refs and team map for reuse across scrape runs."""
+    target = path or active_athlete_refs_cache_path()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+        "ref_count": len(refs),
+        "refs": refs,
+        "team_map": team_map,
+    }
+    target.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return target
+
+
+def load_active_athlete_refs_cache(
+    path: Path | None = None,
+) -> tuple[list[str], dict[str, str]] | None:
+    """Load cached refs and team map, or None if missing or invalid."""
+    target = path or active_athlete_refs_cache_path()
+    if not target.exists():
+        return None
+    try:
+        payload = json.loads(target.read_text(encoding="utf-8"))
+        refs = payload.get("refs")
+        team_map = payload.get("team_map")
+        if not isinstance(refs, list) or not isinstance(team_map, dict):
+            return None
+        if not refs:
+            return None
+        return [str(r) for r in refs], {str(k): str(v) for k, v in team_map.items()}
+    except (json.JSONDecodeError, OSError, TypeError):
+        return None
+
+
+def active_athlete_refs_cache_is_fresh(
+    path: Path | None = None,
+    *,
+    max_age_hours: float | None = None,
+) -> bool:
+    """True if cache file exists and is younger than max_age_hours."""
+    target = path or active_athlete_refs_cache_path()
+    if not target.exists():
+        return False
+    limit = (
+        max_age_hours
+        if max_age_hours is not None
+        else settings.espn_active_athlete_refs_cache_max_age_hours
+    )
+    try:
+        payload = json.loads(target.read_text(encoding="utf-8"))
+        fetched_at = datetime.fromisoformat(payload["fetched_at"])
+        if fetched_at.tzinfo is None:
+            fetched_at = fetched_at.replace(tzinfo=timezone.utc)
+        age_hours = (datetime.now(timezone.utc) - fetched_at).total_seconds() / 3600
+        return age_hours < limit
+    except (json.JSONDecodeError, OSError, KeyError, ValueError, TypeError):
+        return False
+
+
+def active_athlete_refs_cache_fetched_at(path: Path | None = None) -> str | None:
+    """ISO timestamp from cache metadata, if present."""
+    target = path or active_athlete_refs_cache_path()
+    if not target.exists():
+        return None
+    try:
+        payload = json.loads(target.read_text(encoding="utf-8"))
+        value = payload.get("fetched_at")
+        return str(value) if value else None
+    except (json.JSONDecodeError, OSError, TypeError):
+        return None
+
+
+def list_active_athlete_refs(
+    *,
+    timeout: float = DEFAULT_TIMEOUT,
+    force_refresh: bool = False,
+    cache_path: Path | None = None,
+    max_age_hours: float | None = None,
+) -> tuple[list[str], dict[str, str], bool]:
+    """Return active athlete refs, team map, and whether the JSON cache was used."""
+    path = cache_path or active_athlete_refs_cache_path()
+    if not force_refresh and active_athlete_refs_cache_is_fresh(
+        path, max_age_hours=max_age_hours
+    ):
+        cached = load_active_athlete_refs_cache(path)
+        if cached is not None:
+            return cached[0], cached[1], True
+
+    refs, team_map = fetch_active_athlete_refs_from_api(timeout=timeout)
+    save_active_athlete_refs_cache(refs, team_map, path)
+    return refs, team_map, False
 
 
 def resolve_athlete_summary(

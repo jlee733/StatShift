@@ -29,22 +29,31 @@ def scrape_active_players_flow(
     *,
     seasons_back: int = 3,
     max_workers: int = 8,
+    force_refresh_refs: bool = False,
 ) -> dict:
     """Scrape active NFL players partitioned by last-name initial a-z."""
     print("Listing active athlete refs from ESPN...")
-    ref_data = list_active_refs_task()
+    ref_data = list_active_refs_task(force_refresh=force_refresh_refs)
     refs = ref_data["refs"]
     team_map = ref_data["team_map"]
-    print(f"Found {len(refs)} active athlete refs")
+    if ref_data.get("from_cache"):
+        print(
+            f"Using cached athlete refs ({ref_data['ref_count']} refs, "
+            f"fetched {ref_data.get('fetched_at')})"
+        )
+    else:
+        print(f"Fetched {len(refs)} active athlete refs from ESPN")
 
     print("Scraping players by last-name letter (a-z)...")
-    letter_results = scrape_letter_task.map(
+    letter_futures = scrape_letter_task.map(
         LETTERS,
         refs=[refs] * len(LETTERS),
         team_map=[team_map] * len(LETTERS),
         seasons_back=[seasons_back] * len(LETTERS),
         max_workers=[max_workers] * len(LETTERS),
     )
+    # Prefect 3 .map() returns futures; resolve before reading task return values.
+    letter_results = [f.result() for f in letter_futures]
 
     total = sum(r["count"] for r in letter_results)
     print(f"Scraped {total} players across {len(LETTERS)} letter buckets")

@@ -14,6 +14,10 @@ class Settings(BaseSettings):
     db_path: Path = project_root / "data" / "statshift.db"
     espn_letter_cache_dir: Path = project_root / "data" / "espn_active_by_letter"
     espn_active_players_full_path: Path = project_root / "data" / "espn_active_players_full.json"
+    espn_active_athlete_refs_cache_path: Path = (
+        project_root / "data" / "espn_active_athlete_refs.json"
+    )
+    espn_active_athlete_refs_cache_max_age_hours: float = 24.0
     api_base_url: str = "http://127.0.0.1:8000"
     ollama_base_url: str = "http://127.0.0.1:11434"
     ollama_model: str = "gemma2:2b"

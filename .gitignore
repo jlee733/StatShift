@@ -5,6 +5,7 @@ __pycache__/
 data/*.db
 data/*.db-*
 data/espn_active_players.json
+data/espn_active_athlete_refs.json
 data/espn_active_by_letter/
 data/espn_active_players_full.json
 data/ffanalytics_players.json

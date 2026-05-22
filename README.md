@@ -158,6 +158,12 @@ python scripts/load_players_to_db.py
 
 With `ESPN_API_DELAY_SECONDS=30`, a full scrape can take **many hours**. Per-letter JSON is written under `data/espn_active_by_letter/` as each letter completes.
 
+The athlete ref list is cached at `data/espn_active_athlete_refs.json` (default TTL **24 hours**). Re-running the flow after a failure skips the ~20 minute ESPN listing step when the cache is still fresh. Force a refresh:
+
+```python
+scrape_active_players_flow(force_refresh_refs=True)
+```
+
 ## Tests
 
 ```bash
@@ -175,6 +181,7 @@ OLLAMA_MODEL=gemma2:2b
 OLLAMA_BASE_URL=http://127.0.0.1:11434
 API_BASE_URL=http://127.0.0.1:8000
 ESPN_API_DELAY_SECONDS=30
+ESPN_ACTIVE_ATHLETE_REFS_CACHE_MAX_AGE_HOURS=24
 PREFECT_API_URL=http://127.0.0.1:4200/api
 PREFECT_SERVER_ANALYTICS_ENABLED=false
 ```

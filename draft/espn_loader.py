@@ -110,7 +110,7 @@ def fetch_active_players(
     max_workers: int = _RESOLVE_WORKERS,
 ) -> list[Player]:
     """Fetch all active NFL players draftable in fantasy (QB/RB/WR/TE/K)."""
-    refs, team_map = list_active_athlete_refs(timeout=timeout)
+    refs, team_map, _ = list_active_athlete_refs(timeout=timeout)
 
     with httpx.Client(timeout=timeout, follow_redirects=True) as http:
         players: list[Player] = []

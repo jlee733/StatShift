@@ -11,6 +11,8 @@ from db.store import load_merged_cache_into_db
 from espn.scrape import (
     DEFAULT_TIMEOUT,
     DEFAULT_WORKERS,
+    active_athlete_refs_cache_fetched_at,
+    active_athlete_refs_cache_path,
     list_active_athlete_refs,
     merge_letter_caches,
     save_letter_cache,
@@ -22,10 +24,25 @@ from espn.scrape import (
 def list_active_refs_task(
     *,
     timeout: float = DEFAULT_TIMEOUT,
+    force_refresh: bool = False,
+    max_age_hours: float | None = None,
 ) -> dict[str, Any]:
     """Fetch all active athlete refs and team map (shared across letter tasks)."""
-    refs, team_map = list_active_athlete_refs(timeout=timeout)
-    return {"refs": refs, "team_map": team_map, "ref_count": len(refs)}
+    cache_path = active_athlete_refs_cache_path()
+    refs, team_map, from_cache = list_active_athlete_refs(
+        timeout=timeout,
+        force_refresh=force_refresh,
+        cache_path=cache_path,
+        max_age_hours=max_age_hours,
+    )
+    return {
+        "refs": refs,
+        "team_map": team_map,
+        "ref_count": len(refs),
+        "from_cache": from_cache,
+        "cache_path": str(cache_path),
+        "fetched_at": active_athlete_refs_cache_fetched_at(cache_path),
+    }
 
 
 @task(name="scrape_letter", retries=2, retry_delay_seconds=15)
