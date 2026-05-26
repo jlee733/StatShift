@@ -1,4 +1,4 @@
-"""Unit tests for RAG orchestration."""
+"""Unit tests for legacy search engine orchestration."""
 
 from __future__ import annotations
 
@@ -7,9 +7,9 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 
-from rag.engine import APIError, RAGEngine
-from rag.intent import IntentResult, PromptIntent
-from rag.ollama_client import OllamaClient, OllamaError
+from llm.engine import APIError, RAGEngine
+from llm.intent import IntentResult, PromptIntent
+from llm.ollama_client import OllamaClient, OllamaError
 
 
 class RAGEngineTests(unittest.TestCase):
@@ -59,7 +59,7 @@ class RAGEngineTests(unittest.TestCase):
         self.assertIn("Tell me a fun fact", prompt)
         self.assertIn("StatShift", prompt)
 
-    @patch("rag.engine.httpx.get")
+    @patch("llm.engine.httpx.get")
     def test_ask_definitive_uses_api_not_gemma(self, mock_get: MagicMock) -> None:
         mock_get.return_value = MagicMock(
             raise_for_status=MagicMock(),
@@ -85,7 +85,7 @@ class RAGEngineTests(unittest.TestCase):
         mock_get.assert_called_once()
         self.mock_ollama.generate.assert_not_called()
 
-    @patch("rag.engine.httpx.get")
+    @patch("llm.engine.httpx.get")
     def test_ask_conversational_uses_gemma_not_api(self, mock_get: MagicMock) -> None:
         self.mock_ollama.generate.return_value = "Fantasy football is a weekly game."
         intent = IntentResult(PromptIntent.CONVERSATIONAL, reason="test")
@@ -99,14 +99,14 @@ class RAGEngineTests(unittest.TestCase):
         mock_get.assert_not_called()
         self.mock_ollama.generate.assert_called_once()
 
-    @patch("rag.engine.httpx.get")
+    @patch("llm.engine.httpx.get")
     def test_search_api_error_raises(self, mock_get: MagicMock) -> None:
         mock_get.side_effect = httpx.ConnectError("refused")
         intent = IntentResult(PromptIntent.DEFINITIVE, reason="test")
         with self.assertRaises(APIError):
             self.engine.ask("How many yards did Burrow throw for?", intent=intent)
 
-    @patch("rag.engine.httpx.get")
+    @patch("llm.engine.httpx.get")
     def test_ask_ollama_error_wrapped(self, mock_get: MagicMock) -> None:
         self.mock_ollama.generate.side_effect = httpx.ConnectError("down")
         intent = IntentResult(PromptIntent.CONVERSATIONAL, reason="test")
@@ -114,7 +114,7 @@ class RAGEngineTests(unittest.TestCase):
             self.engine.ask("Hi there", intent=intent)
         mock_get.assert_not_called()
 
-    @patch("rag.engine.httpx.get")
+    @patch("llm.engine.httpx.get")
     def test_health_reports_status(self, mock_get: MagicMock) -> None:
         mock_get.return_value = MagicMock(
             status_code=200,

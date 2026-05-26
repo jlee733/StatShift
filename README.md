@@ -2,8 +2,8 @@
 
 Local fantasy football statistics assistant. Query seeded NFL/fantasy data through a read-only API, or chat with a local LLM for open-ended analysis.
 
-**Streamlit** → **RAG** → **FastAPI (read-only)** → **SQLite**  
-**RAG** → **Ollama** → **Gemma**
+**Streamlit** → **MCP** → **FastAPI (read-only)** → **SQLite**  
+**MCP** → **Ollama** → **Gemma**
 
 Factual questions (stats, matchups, injuries) are answered from the database. Conversational prompts go to Gemma.
 
@@ -17,13 +17,13 @@ Factual questions (stats, matchups, injuries) are answered from the database. Co
 | `espn/` | ESPN client, player research, bulk scrape |
 | `jobs/` | Prefect ingestion flows |
 | `draft/` | Mock draft engine and player pools |
-| `rag/` | Intent routing and Ollama Q&A |
+| `llm/` | Intent routing, MCP agent client, and Ollama Q&A |
 | `scripts/` | DB init and sync CLIs |
 
 ## Prerequisites
 
 - **Docker (recommended):** Docker Desktop or Docker Engine with Compose v2
-- **Or local Python 3.11+** and [Ollama](https://ollama.com) with Gemma (`ollama pull gemma2:2b`)
+- **Or local Python 3.11+** and [Ollama](https://ollama.com) with Gemma 4 E2B (`ollama pull batiai/gemma4-e2b:q4`)
 
 The Docker image includes R, [ffanalytics](https://github.com/FantasyFootballAnalytics/ffanalytics), and `rpy2` for the Mock Draft tab — no separate R install when using Compose.
 
@@ -33,7 +33,7 @@ The Docker image includes R, [ffanalytics](https://github.com/FantasyFootballAna
 docker compose up --build
 ```
 
-First startup pulls `gemma2:2b` into the Ollama container (can take a few minutes). Then open:
+First startup pulls `batiai/gemma4-e2b:q4` into the Ollama container (can take a few minutes). Then open:
 
 **http://localhost:8501**
 
@@ -54,6 +54,7 @@ Services:
 | `ui` | Streamlit (your browser connects here) | 8501 |
 | `api` | FastAPI read-only API | 8000 |
 | `ollama` | Gemma inference | 11434 |
+| `ollama-warmup` | One-shot: loads Gemma into memory before UI starts | — |
 
 Inside the Compose network, the UI talks to `http://api:8000` and `http://ollama:11434`.
 
@@ -177,14 +178,31 @@ CI runs the same suite on pull requests and pushes to `main` (ffanalytics parsin
 Optional `.env` overrides:
 
 ```env
-OLLAMA_MODEL=gemma2:2b
+OLLAMA_MODEL=batiai/gemma4-e2b:q4
 OLLAMA_BASE_URL=http://127.0.0.1:11434
+OLLAMA_TIMEOUT_SECONDS=600
 API_BASE_URL=http://127.0.0.1:8000
+MCP_SERVER_URL=http://127.0.0.1:8000/mcp
 ESPN_API_DELAY_SECONDS=30
 ESPN_ACTIVE_ATHLETE_REFS_CACHE_MAX_AGE_HOURS=24
 PREFECT_API_URL=http://127.0.0.1:4200/api
 PREFECT_SERVER_ANALYTICS_ENABLED=false
 ```
+
+## Ask page (Gemma 4 E2B)
+
+The Ask page uses **Gemma 4 E2B** (`batiai/gemma4-e2b:q4`). **Open-ended** questions (e.g. “What do you think of Mahomes?”) go straight to the model. **Factual** questions (stats, game logs, injuries) use tools against the StatShift API.
+
+If Ollama returns HTTP 500, give Docker enough RAM for the model or run `ollama pull batiai/gemma4-e2b:q4`.
+
+The first Ask after `docker compose up` can take 1–3 minutes while Gemma loads. Compose runs `ollama-warmup` before the UI starts so the model is usually ready at http://localhost:8501. If you see a timeout, wait for `ollama-warmup` to finish in the logs, or run `docker compose up` again.
+
+The agent uses these tools to answer questions:
+- `search_documents` — FTS search for fantasy analysis
+- `search_players` — Find players by name
+- `get_player` — Get detailed stats, injuries, game logs
+- `list_players` — Browse players by letter
+- `list_categories` — List document categories
 
 ## API (read-only)
 
@@ -193,11 +211,12 @@ PREFECT_SERVER_ANALYTICS_ENABLED=false
 | `GET /health` | Service + DB check (`player_count`, `last_scrape_at`) |
 | `GET /documents` | List documents |
 | `GET /documents/{id}` | Single document |
-| `GET /search?q=...` | FTS search for RAG |
+| `GET /search?q=...` | FTS search |
 | `GET /categories` | Distinct categories |
 | `GET /players` | List scraped players (`letter`, `limit`, `offset`) |
 | `GET /players/search?q=...` | Search players by name |
 | `GET /players/{espn_id}` | Player profile, injuries, game logs |
+| `GET /mcp` | MCP server endpoint for tool calling |
 
 `POST`, `PUT`, `PATCH`, and `DELETE` return **405** — writes are blocked at the API layer; SQLite is opened in read-only mode for queries.
 

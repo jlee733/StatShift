@@ -1,4 +1,4 @@
-"""Sample fantasy-football documents for RAG seeding."""
+"""Sample fantasy-football documents for search seeding."""
 
 DOCUMENTS = [
     {

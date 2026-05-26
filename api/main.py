@@ -10,12 +10,16 @@ from pydantic import BaseModel
 
 from db.read import db
 from config import settings
+from api.mcp_server import create_mcp_server
 
 app = FastAPI(
     title="StatShift API",
     description="Read-only fantasy football stats API over SQLite. Write operations are blocked.",
     version="0.1.0",
 )
+
+mcp = create_mcp_server(app)
+mcp.mount()
 
 WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 

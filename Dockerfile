@@ -32,11 +32,12 @@ COPY requirements.txt .
 RUN pip install -r requirements.txt
 
 COPY config.py .
+COPY .streamlit/ .streamlit/
 COPY db/ db/
 COPY api/ api/
 COPY espn/ espn/
 COPY jobs/ jobs/
-COPY rag/ rag/
+COPY llm/ llm/
 COPY draft/ draft/
 COPY ui/ ui/
 COPY scripts/ scripts/

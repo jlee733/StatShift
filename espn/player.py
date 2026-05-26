@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from typing import Any
 
 import httpx
-
-from espn.rate_limit import wait_before_espn_request
 
 CORE_API_BASE = "https://sports.core.api.espn.com/v2/sports/football/leagues/nfl"
 CFB_API_BASE = "https://sports.core.api.espn.com/v2/sports/football/leagues/college-football"
@@ -119,8 +118,7 @@ def gamelog_to_dict(entry: GameLogEntry) -> dict[str, Any]:
 
 
 def _get_json(url: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Make a GET request and return JSON response."""
-    wait_before_espn_request()
+    """Make a GET request and return JSON response (research; no bulk-scrape throttle)."""
     with httpx.Client(timeout=TIMEOUT, follow_redirects=True) as client:
         response = client.get(url, params=params)
         response.raise_for_status()
@@ -249,67 +247,15 @@ def _headshot_from_search_item(item: dict[str, Any]) -> str:
     return ""
 
 
-def _position_for_player_id(player_id: str) -> str:
+def _fetch_athlete_core(player_id: str) -> dict[str, Any] | None:
+    """Load athlete JSON from the same endpoint used for profile lookup."""
     try:
-        data = _get_json(f"{CORE_API_BASE}/athletes/{player_id}")
-        return _safe_get(data, "position", "abbreviation", default="—")
-    except httpx.HTTPError:
-        return "—"
-
-
-def search_players(query: str, limit: int = 10) -> list[dict[str, Any]]:
-    """Search active NFL players by name via ESPN common search API."""
-    if not query or len(query.strip()) < 2:
-        return []
-
-    try:
-        data = _get_json(
-            COMMON_SEARCH_URL,
-            params={
-                "query": query.strip(),
-                "limit": max(limit * 3, 25),
-                "type": "player",
-                "sport": "football",
-                "league": "nfl",
-            },
-        )
-    except httpx.HTTPError:
-        return []
-
-    results: list[dict[str, Any]] = []
-
-    for item in data.get("items", []):
-        if len(results) >= limit:
-            break
-        if not item.get("isActive") or item.get("isRetired"):
-            continue
-
-        player_id = str(item.get("id", ""))
-        if not player_id:
-            continue
-
-        results.append({
-            "id": player_id,
-            "name": item.get("displayName", "Unknown"),
-            "position": _position_for_player_id(player_id),
-            "team": _team_from_search_item(item),
-            "headshot": _headshot_from_search_item(item),
-            "active": True,
-            "status": "Active",
-        })
-
-    return results
-
-
-def get_player_profile(player_id: str) -> PlayerProfile | None:
-    """Get detailed player profile information."""
-    url = f"{CORE_API_BASE}/athletes/{player_id}"
-    
-    try:
-        data = _get_json(url)
+        return _get_json(f"{CORE_API_BASE}/athletes/{player_id}")
     except httpx.HTTPError:
         return None
-    
+
+
+def _player_profile_from_athlete(data: dict[str, Any]) -> PlayerProfile:
     height_inches = data.get("height")
     weight_pounds = data.get("weight")
     
@@ -336,7 +282,8 @@ def get_player_profile(player_id: str) -> PlayerProfile | None:
     return PlayerProfile(
         id=str(data.get("id", "")),
         name=data.get("displayName", "Unknown"),
-        position=_safe_get(data, "position", "displayName", default="—"),
+        position=_safe_get(data, "position", "abbreviation", default="—")
+        or _safe_get(data, "position", "displayName", default="—"),
         team=_safe_get(data, "team", "displayName", default="Free Agent"),
         jersey=str(data.get("jersey", "—")),
         height=_format_height(height_inches),
@@ -350,6 +297,150 @@ def get_player_profile(player_id: str) -> PlayerProfile | None:
         headshot_url=_safe_get(data, "headshot", "href", default=""),
         status=_safe_get(data, "status", "name", default="Active"),
     )
+
+
+def get_player_profile(
+    player_id: str,
+    *,
+    athlete: dict[str, Any] | None = None,
+) -> PlayerProfile | None:
+    """Get detailed player profile information."""
+    data = athlete if athlete is not None else _fetch_athlete_core(player_id)
+    if not data:
+        return None
+    return _player_profile_from_athlete(data)
+
+
+def _search_players_from_db(query: str, *, limit: int) -> list[dict[str, Any]]:
+    """Fast local search when the scrape has populated SQLite."""
+    from db.read import ReadOnlyDatabase
+
+    db = ReadOnlyDatabase()
+    if db.count_players() == 0:
+        return []
+
+    results: list[dict[str, Any]] = []
+    for row in db.search_players(query, limit=limit):
+        espn_id = str(row["espn_id"])
+        results.append({
+            "id": espn_id,
+            "name": row.get("display_name")
+            or f"{row.get('first_name', '')} {row.get('last_name', '')}".strip(),
+            "position": row.get("position") or "—",
+            "team": row.get("team") or "—",
+            "headshot": f"https://a.espncdn.com/i/headshots/nfl/players/full/{espn_id}.png",
+            "active": True,
+            "status": row.get("status") or "Active",
+        })
+    return results
+
+
+def _search_result_from_athlete(
+    player_id: str,
+    *,
+    search_name: str,
+    team: str,
+    headshot: str,
+    athlete: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Build a search row using the same athlete payload as profile lookup."""
+    position = "—"
+    status = "Active"
+    if athlete:
+        position = (
+            _safe_get(athlete, "position", "abbreviation", default="—")
+            or _safe_get(athlete, "position", "displayName", default="—")
+        )
+        status = _safe_get(athlete, "status", "name", default="Active")
+
+    return {
+        "id": player_id,
+        "name": search_name,
+        "position": position,
+        "team": team,
+        "headshot": headshot,
+        "active": True,
+        "status": status,
+        "athlete": athlete,
+    }
+
+
+def _search_players_from_espn(query: str, *, limit: int) -> list[dict[str, Any]]:
+    """ESPN search + parallel athlete fetches (same endpoint as get_player_profile)."""
+    try:
+        data = _get_json(
+            COMMON_SEARCH_URL,
+            params={
+                "query": query,
+                "limit": max(limit * 3, 25),
+                "type": "player",
+                "sport": "football",
+                "league": "nfl",
+            },
+        )
+    except httpx.HTTPError:
+        return []
+
+    pending: list[tuple[str, str, str, str]] = []
+    for item in data.get("items", []):
+        if len(pending) >= limit:
+            break
+        if not item.get("isActive") or item.get("isRetired"):
+            continue
+
+        player_id = str(item.get("id", ""))
+        if not player_id:
+            continue
+
+        pending.append(
+            (
+                player_id,
+                item.get("displayName", "Unknown"),
+                _team_from_search_item(item),
+                _headshot_from_search_item(item),
+            )
+        )
+
+    if not pending:
+        return []
+
+    athletes: dict[str, dict[str, Any] | None] = {}
+    max_workers = min(8, len(pending))
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {
+            pool.submit(_fetch_athlete_core, player_id): player_id
+            for player_id, _, _, _ in pending
+        }
+        for future in as_completed(futures):
+            player_id = futures[future]
+            try:
+                athletes[player_id] = future.result()
+            except Exception:
+                athletes[player_id] = None
+
+    return [
+        _search_result_from_athlete(
+            player_id,
+            search_name=name,
+            team=team,
+            headshot=headshot,
+            athlete=athletes.get(player_id),
+        )
+        for player_id, name, team, headshot in pending
+    ]
+
+
+def search_players(query: str, limit: int = 10) -> list[dict[str, Any]]:
+    """Search active NFL players by name (local DB first, else ESPN)."""
+    q = query.strip()
+    if len(q) < 2:
+        return []
+
+    db_results = _search_players_from_db(q, limit=limit)
+    if db_results:
+        return db_results
+
+    return _search_players_from_espn(q, limit=limit)
 
 
 def get_player_college_stats(player_id: str) -> list[CollegeSeasonStats]:

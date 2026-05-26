@@ -35,6 +35,17 @@ def _init_research_state() -> None:
         st.session_state["research_selected_player"] = None
     if "research_search_results" not in st.session_state:
         st.session_state["research_search_results"] = []
+    if "research_athlete_cache" not in st.session_state:
+        st.session_state["research_athlete_cache"] = {}
+
+
+def _cache_search_athletes(results: list[dict]) -> None:
+    """Reuse ESPN athlete payloads from search when opening a profile."""
+    cache = st.session_state["research_athlete_cache"]
+    for row in results:
+        athlete = row.get("athlete")
+        if athlete:
+            cache[str(row["id"])] = athlete
 
 
 def _render_search() -> None:
@@ -60,6 +71,7 @@ def _render_search() -> None:
     if search_clicked and query.strip():
         with st.spinner("Searching..."):
             results = search_players(query.strip())
+            _cache_search_athletes(results)
             st.session_state["research_search_results"] = results
             if not results:
                 st.warning("No players found. Try a different search term.")
@@ -394,8 +406,12 @@ def render_research_page() -> None:
     if not player_id:
         return
     
+    athlete_cache = st.session_state.get("research_athlete_cache", {})
     with st.spinner("Loading player profile..."):
-        profile = get_player_profile(player_id)
+        profile = get_player_profile(
+            player_id,
+            athlete=athlete_cache.get(str(player_id)),
+        )
     
     if not profile:
         st.error("Could not load player profile. Please try again.")

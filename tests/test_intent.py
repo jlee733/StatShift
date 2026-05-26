@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import unittest
 
-from rag.intent import PromptIntent, detect_prompt_intent
+from llm.intent import PromptIntent, detect_prompt_intent
 
 
 class DetectPromptIntentTests(unittest.TestCase):

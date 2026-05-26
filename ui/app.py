@@ -18,6 +18,7 @@ st.set_page_config(
     page_title="StatShift",
     page_icon="📊",
     layout="wide",
+    initial_sidebar_state="expanded",
 )
 
 
@@ -31,24 +32,28 @@ def _rpy2_ready() -> bool:
 _rpy2_ready()
 inject_global_styles()
 
-PAGES_DIR = Path(__file__).parent / "pages"
+VIEWS_DIR = Path(__file__).parent / "views"
 
 home_page = st.Page(
-    str(PAGES_DIR / "mock_draft.py"),
+    str(VIEWS_DIR / "mock_draft.py"),
     title="Home",
     icon="🏠",
     default=True,
 )
 ask_page = st.Page(
-    str(PAGES_DIR / "ask.py"),
+    str(VIEWS_DIR / "ask.py"),
     title="Ask",
     icon="💬",
 )
 research_page = st.Page(
-    str(PAGES_DIR / "research.py"),
+    str(VIEWS_DIR / "research.py"),
     title="Research",
     icon="🔍",
 )
 
-pg = st.navigation([home_page, ask_page, research_page])
+pg = st.navigation(
+    [home_page, ask_page, research_page],
+    position="sidebar",
+    expanded=True,
+)
 pg.run()

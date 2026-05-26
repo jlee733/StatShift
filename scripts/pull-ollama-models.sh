@@ -14,7 +14,11 @@ ensure_model() {
     fi
 }
 
-ensure_model "gemma2:latest"
-ensure_model "llama3:latest"
+# Gemma 4 E2B (batiai quant) powers the Ask page
+ensure_model "batiai/gemma4-e2b:q4"
+
+# Llama 4 Scout is optional (67GB, requires significant RAM/VRAM)
+# Uncomment to enable:
+# ensure_model "llama4:scout"
 
 echo "All models ready!"

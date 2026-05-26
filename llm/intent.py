@@ -45,7 +45,10 @@ _DEFINITIVE_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
 
 _CONVERSATIONAL_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"^\s*(hi|hello|hey|thanks|thank you)\b", re.I), "greeting"),
-    (re.compile(r"\b(what do you think|in your opinion|do you believe)\b", re.I), "opinion"),
+    (
+        re.compile(r"\b(what do you think(\s+of)?|in your opinion|do you believe)\b", re.I),
+        "opinion",
+    ),
     (re.compile(r"\b(should i draft|would you draft|dynasty value)\b", re.I), "draft advice"),
     (re.compile(r"\b(explain like|eli5|tell me a story|write a|poem|joke)\b", re.I), "creative"),
     (re.compile(r"\b(brainstorm|ideas? for|help me (think|decide))\b", re.I), "open-ended help"),

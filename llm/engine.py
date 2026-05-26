@@ -1,4 +1,4 @@
-"""RAG orchestration: route by intent to API retrieval or Gemma chat."""
+"""Legacy search orchestration: route by intent to API retrieval or Gemma chat."""
 
 from __future__ import annotations
 
@@ -8,8 +8,8 @@ from typing import Any, Literal
 import httpx
 
 from config import settings
-from rag.intent import IntentResult, PromptIntent, detect_prompt_intent
-from rag.ollama_client import OllamaClient, OllamaError
+from llm.intent import IntentResult, PromptIntent, detect_prompt_intent
+from llm.ollama_client import OllamaClient, OllamaError
 
 
 class APIError(RuntimeError):

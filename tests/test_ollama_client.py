@@ -7,25 +7,25 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 
-from rag.ollama_client import OllamaClient, OllamaError
+from llm.ollama_client import OllamaClient, OllamaError
 
 
 class OllamaClientTests(unittest.TestCase):
     def setUp(self) -> None:
         self.client = OllamaClient(base_url="http://ollama.test", model="gemma2:2b")
 
-    @patch("rag.ollama_client.httpx.get")
+    @patch("llm.ollama_client.httpx.get")
     def test_is_available_true(self, mock_get: MagicMock) -> None:
         mock_get.return_value = MagicMock(status_code=200, raise_for_status=MagicMock())
         self.assertTrue(self.client.is_available())
         mock_get.assert_called_once_with("http://ollama.test/api/tags", timeout=5.0)
 
-    @patch("rag.ollama_client.httpx.get")
+    @patch("llm.ollama_client.httpx.get")
     def test_is_available_false_on_error(self, mock_get: MagicMock) -> None:
         mock_get.side_effect = httpx.ConnectError("down")
         self.assertFalse(self.client.is_available())
 
-    @patch("rag.ollama_client.httpx.get")
+    @patch("llm.ollama_client.httpx.get")
     def test_list_models(self, mock_get: MagicMock) -> None:
         mock_get.return_value = MagicMock(
             raise_for_status=MagicMock(),
@@ -33,7 +33,7 @@ class OllamaClientTests(unittest.TestCase):
         )
         self.assertEqual(self.client.list_models(), ["gemma2:2b", "llama3"])
 
-    @patch("rag.ollama_client.httpx.post")
+    @patch("llm.ollama_client.httpx.post")
     def test_generate_returns_response_text(self, mock_post: MagicMock) -> None:
         mock_post.return_value = MagicMock(
             status_code=200,
@@ -48,7 +48,7 @@ class OllamaClientTests(unittest.TestCase):
         self.assertEqual(payload["prompt"], "prompt")
         self.assertFalse(payload["stream"])
 
-    @patch("rag.ollama_client.httpx.post")
+    @patch("llm.ollama_client.httpx.post")
     def test_generate_missing_model_raises(self, mock_post: MagicMock) -> None:
         mock_post.return_value = MagicMock(status_code=404)
         with self.assertRaises(OllamaError) as ctx:
